@@ -439,6 +439,21 @@ typedef struct ie_info {
 } wifi_ie_info_t;
 #endif
 
+#ifdef CONFIG_IEEE80211BE
+#ifndef MAX_NUM_MLD_LINKS
+#define MAX_NUM_MLD_LINKS 16
+#endif
+typedef struct sta_mlo_params {
+    const uint8_t mld_addr[ETH_ALEN];
+    uint16_t valid_links;
+    uint8_t assoc_link_id;
+    struct {
+        int freq;
+        uint8_t bssid[ETH_ALEN];
+    } mld_links[MAX_NUM_MLD_LINKS];
+} sta_mlo_params_t;
+#endif /* CONFIG_IEEE80211BE */
+
 typedef struct wifi_interface_info_t {
     char name[32];
     char bridge[32];
@@ -513,6 +528,9 @@ typedef struct wifi_interface_info_t {
 #endif
     char mld_name[32];
     bool in_reconf;
+#ifdef CONFIG_IEEE80211BE
+    struct sta_mlo_params mlo_params;
+#endif /* CONFIG_IEEE80211BE */
 } wifi_interface_info_t;
 
 #define MAX_RATES   16
