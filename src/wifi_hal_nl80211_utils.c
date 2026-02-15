@@ -5615,10 +5615,13 @@ char *wifi_hal_get_interface_name(wifi_interface_info_t *interface)
 
     if (interface->mld_name[0] == '\0') {
         return interface->name;
+        wifi_hal_info_print("%s:%d:->non-mldname:%s\n", __func__, __LINE__, interface->name);
     }
-
-    if (interface->vap_info.vap_mode == wifi_vap_mode_ap &&
-        interface->vap_info.u.bss_info.mld_info.common_info.mld_enable) {
+	else {
+// added in FEB;
+//    if (interface->vap_info.vap_mode == wifi_vap_mode_ap &&
+//        interface->vap_info.u.bss_info.mld_info.common_info.mld_enable) {
+        wifi_hal_info_print("%s:%d:->mldname:%s,vap_mode:%d,ap:%d\n", __func__, __LINE__, interface->mld_name, interface->vap_info.vap_mode, wifi_vap_mode_ap);
         return interface->mld_name;
     }
 
@@ -5750,8 +5753,10 @@ int wifi_hal_set_mld_mac_address(wifi_interface_info_t *interface, mac_address_t
     if (interface->vap_info.vap_mode == wifi_vap_mode_ap) {
         memcpy(interface->vap_info.u.bss_info.mld_info.common_info.mld_addr, mac,
             sizeof(mac_address_t));
+        wifi_hal_error_print("%s:%d 0->\n", __func__, __LINE__);
         return 0;
     }
+    wifi_hal_error_print("%s:%d 0->\n", __func__, __LINE__);
 
     return -1;
 }

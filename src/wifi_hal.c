@@ -99,6 +99,92 @@
 #define VHT_OPER_CHANWIDTH_80P80MHZ         3
 #endif // VHT_OPER_CHANWIDTH_20_40MHZ
 
+#ifdef CONFIG_IEEE80211BE
+#ifndef WLAN_EID_EXTENSION
+#define WLAN_EID_EXTENSION 0xFF
+#endif /* WLAN_EID_EXTENSION */
+
+#ifndef WLAN_EID_FRAGMENT
+#define WLAN_EID_FRAGMENT 0xF2
+#endif /* WLAN_EID_FRAGMENT */
+
+#ifndef WLAN_EID_EXT_MULTI_LINK
+#define WLAN_EID_EXT_MULTI_LINK 0x6B
+#endif /* WLAN_EID_EXT_MULTI_LINK */
+
+#ifndef MULTI_LINK_CONTROL_LEN
+#define MULTI_LINK_CONTROL_LEN 2
+#endif /* MULTI_LINK_CONTROL_LEN */
+
+#ifndef MULTI_LINK_CONTROL_TYPE_MASK
+#define MULTI_LINK_CONTROL_TYPE_MASK 0x07
+#endif /* MULTI_LINK_CONTROL_TYPE_MASK */
+
+#ifndef MULTI_LINK_CONTROL_TYPE_BASIC
+#define MULTI_LINK_CONTROL_TYPE_BASIC 0
+#endif /* MULTI_LINK_CONTROL_TYPE_BASIC */
+
+#ifndef MULTI_LINK_SUB_ELEM_ID_PER_STA_PROFILE
+#define MULTI_LINK_SUB_ELEM_ID_PER_STA_PROFILE 0
+#endif /* MULTI_LINK_SUB_ELEM_ID_PER_STA_PROFILE */
+
+#ifndef MLE_STA_CTRL_LEN
+#define MLE_STA_CTRL_LEN 2
+#endif /* MLE_STA_CTRL_LEN */
+
+#ifndef MLE_STA_CTRL_LINK_ID_MASK
+#define MLE_STA_CTRL_LINK_ID_MASK 0xF
+#endif /* MLE_STA_CTRL_LINK_ID_MASK */
+
+#ifndef MLE_STA_CTRL_MAC
+#define MLE_STA_CTRL_MAC 0x20
+#endif /* MLE_STA_CTRL_MAC */
+
+#ifndef MLE_STA_CAP_LEN
+#define MLE_STA_CAP_LEN 2
+#endif /* MLE_STA_CAP_LEN */
+
+#ifndef MLE_STA_STATUS_LEN
+#define MLE_STA_STATUS_LEN 2
+#endif /* MLE_STA_STATUS_LEN */
+
+#ifndef WLAN_EID_HT_OPER
+#define WLAN_EID_HT_OPER 0x3D
+#endif /* WLAN_EID_HT_OPER */
+
+#ifndef WLAN_EID_VHT_OPER
+#define WLAN_EID_VHT_OPER 0xC0
+#endif /* WLAN_EID_VHT_OPER */
+
+#ifndef WLAN_EID_EHT_OPER
+#define WLAN_EID_EHT_OPER 0x6A
+#endif /* WLAN_EID_EHT_OPER */
+
+#ifndef TWO_GHZ_BASE
+#define TWO_GHZ_BASE 2407
+#endif /* TWO_GHZ_BASE */
+
+#ifndef FIVE_GHZ_BASE
+#define FIVE_GHZ_BASE 5000
+#endif /* FIVE_GHZ_BASE */
+
+#ifndef SIX_GHZ_BASE
+#define SIX_GHZ_BASE 5950
+#endif /* SIX_GHZ_BASE */
+
+#ifndef CHANNEL_SPAN
+#define CHANNEL_SPAN 5
+#endif /* CHANNEL_SPAN */
+
+#ifndef CHANNEL_FOURTEEN
+#define CHANNEL_FOURTEEN 14
+#endif /* CHANNEL_FOURTEEN */
+
+#ifndef CHANNEL_FOURTEEN_FREQ
+#define CHANNEL_FOURTEEN_FREQ 2484
+#endif /* CHANNEL_FOURTEEN_FREQ */
+#endif /* CONFIG_IEEE80211BE */
+
 static int g_fd_arr[MAX_VAP] = {0};
 static int g_IfIdx_arr[MAX_VAP] = {0};
 static unsigned char g_vapSmac[MAX_VAP][MAC_ADDRESS_LEN] = {'\0'};
@@ -1107,6 +1193,293 @@ reload_config:
 
 }
 
+#ifdef CONFIG_IEEE80211BE
+static int parse_freq_from_ies(const uint8_t *sub, size_t sub_len)
+{
+    if (!sub || (sub_len < 2)) {
+        wifi_hal_info_print("%s:%d: Invalid input for parsing frequency - returning\n", __func__, __LINE__);
+        return -1;
+    }
+
+    wifi_hal_info_print("%s:%d: Parsing primary channel and operation modes\n", __func__, __LINE__);
+    int frequency = -1;
+    size_t pos = 0;
+    uint8_t primary_channel = 0;
+    bool eht_present = false, vht_present = false;
+
+    while ((pos + 2) <= sub_len) {
+        uint8_t id  = sub[pos];
+        uint8_t len = sub[pos + 1];
+
+        if ((pos + 2 + len) > sub_len) {
+            /* incomplete data */
+            break;
+        }
+
+        const uint8_t *data = &sub[pos + 2];
+
+        switch (id) {
+        case WLAN_EID_HT_OPER:
+            if (len >= 1) {
+                primary_channel = data[0];
+            }
+            break;
+        case WLAN_EID_VHT_OPER:
+            vht_present = true;
+            break;
+        case WLAN_EID_EXTENSION:
+            if ((len >= 1) && (data[0] == WLAN_EID_EHT_OPER)) {
+                eht_present = true;
+            }
+            break;
+        default:
+            break;
+        }
+
+        pos += 2 + len;
+    }
+
+    if (eht_present) {
+        frequency = SIX_GHZ_BASE + CHANNEL_SPAN * primary_channel;
+        wifi_hal_info_print("%s:%d: EHT operation mode detected, channel: %d, frequency: %d\n", __func__, __LINE__, primary_channel, frequency);
+    } else if (vht_present) {
+        frequency = FIVE_GHZ_BASE + CHANNEL_SPAN * primary_channel;
+        wifi_hal_info_print("%s:%d: VHT operation mode detected, channel: %d, frequency: %d\n", __func__, __LINE__, primary_channel, frequency);
+    } else if (primary_channel == CHANNEL_FOURTEEN) {
+        frequency = CHANNEL_FOURTEEN_FREQ;
+        wifi_hal_info_print("%s:%d: Channel: %d, frequency: %d\n", __func__, __LINE__, primary_channel, frequency);
+    } else {
+        frequency = TWO_GHZ_BASE + CHANNEL_SPAN * primary_channel;
+        wifi_hal_info_print("%s:%d: Channel: %d, frequency: %d\n", __func__, __LINE__, primary_channel, frequency);
+    }
+
+    return frequency;
+}
+
+static void parse_per_sta(const uint8_t *sub, size_t sub_len, sta_mlo_params_t *params)
+{
+    if ((sub_len < MLE_STA_CTRL_LEN) || !sub) {
+        wifi_hal_info_print("%s:%d: Invalid input for parsing Per-STA parameters - returning\n", __func__, __LINE__);
+        return;
+    }
+
+    wifi_hal_info_print("%s:%d: Parsing link ID\n", __func__, __LINE__);
+    uint16_t sta_ctrl = sub[0] | (sub[1] << 8);
+    uint8_t link_id = sta_ctrl & MLE_STA_CTRL_LINK_ID_MASK;
+
+    if (link_id >= MAX_NUM_MLD_LINKS) {
+        wifi_hal_info_print("%s:%d: Invalid link ID: %d - returning\n", __func__, __LINE__, link_id);
+        return;
+    }
+
+    wifi_hal_info_print("%s:%d: Parsing link MAC\n", __func__, __LINE__);
+    const uint8_t *p = sub + MLE_STA_CTRL_LEN;
+    const uint8_t *bssid = NULL;
+
+    if (sta_ctrl & MLE_STA_CTRL_MAC) {
+        if (p[0] < ETH_ALEN) {
+            wifi_hal_info_print("%s:%d: Not enough octets left for MAC: %d - returning\n", __func__, __LINE__, p[0]);
+            return;
+        }
+
+        bssid = p + 1;
+    }
+
+    wifi_hal_info_print("%s:%d: Link ID: %d\n", __func__, __LINE__, link_id);
+    const size_t left = sub_len - MLE_STA_CTRL_LEN - p[0] - 1 - MLE_STA_CAP_LEN - MLE_STA_STATUS_LEN;
+    p += p[0] + 1 + MLE_STA_CAP_LEN + MLE_STA_STATUS_LEN;
+    params->valid_links |= BIT(link_id);
+    memcpy(&params->mld_links[link_id].bssid, bssid, ETH_ALEN);
+    params->mld_links[link_id].freq = (left > 0) ? parse_freq_from_ies(p, left) : -1;
+}
+
+static sta_mlo_params_t *mlo_parse_from_ies(const uint8_t *ies, size_t ies_len)
+{
+    if (!ies || (ies_len < 4)) {
+        wifi_hal_info_print("%s:%d: No IEs available for parsing - returning\n", __func__, __LINE__);
+        return NULL;
+    }
+
+    wifi_hal_info_print("%s:%d: Calculating total length if Multi-Link IEs\n", __func__, __LINE__);
+    size_t pos = 0, mle_total_len = 0;
+    bool found = false;
+
+    while ((pos + 2) <= ies_len) {
+        const uint8_t id  = ies[pos];
+        const uint8_t len = ies[pos + 1];
+
+        if ((pos + 2 + len) > ies_len) {
+            break;
+        }
+
+        if ((id == WLAN_EID_EXTENSION) && (len >= 1) && !mle_total_len) {
+            const uint8_t *ext = &ies[pos + 2];
+
+            if (ext[0] == WLAN_EID_EXT_MULTI_LINK) {
+                size_t head_len = len - 1;
+
+                if (head_len <= MULTI_LINK_CONTROL_LEN) {
+                    wifi_hal_info_print("%s:%d: Multi-Link IE length is too short: %ld - returning\n", __func__, __LINE__, head_len);
+                    return NULL;
+                }
+
+                mle_total_len += head_len;
+                found = true;
+            }
+        } else if ((id == WLAN_EID_FRAGMENT) && mle_total_len) {
+            mle_total_len += len;
+        } else if (mle_total_len) {
+            break;
+        }
+
+        pos += 2 + len;
+    }
+
+    wifi_hal_info_print("%s:%d: Finished calculating length of IEs: %ld\n", __func__, __LINE__, mle_total_len);
+
+    if (!found || (mle_total_len <= MULTI_LINK_CONTROL_LEN)) {
+        wifi_hal_info_print("%s:%d: No Multi-Link IE found or length is too short - returning\n", __func__, __LINE__);
+        return NULL;
+    }
+
+    wifi_hal_info_print("%s:%d: Allocating buffer for concatenation of Multi-Link IEs\n", __func__, __LINE__);
+    uint8_t *storage = calloc(mle_total_len, sizeof(uint8_t));
+
+    if (!storage) {
+        wifi_hal_info_print("%s:%d: Failed to allocate memory - returning\n", __func__, __LINE__);
+        return NULL;
+    }
+
+    wifi_hal_info_print("%s:%d: Concatenating Multi-Link IEs\n", __func__, __LINE__);
+    size_t offset = 0;
+    pos = 0;
+
+    while (((pos + 2) <= ies_len) && (offset < mle_total_len)) {
+        uint8_t id  = ies[pos];
+        uint8_t len = ies[pos + 1];
+
+        if ((pos + 2 + len) > ies_len) {
+            break;
+        }
+
+        if ((id == WLAN_EID_EXTENSION) && (len >= 1) && !offset) {
+            const uint8_t *ext = &ies[pos + 2];
+            if (ext[0] == WLAN_EID_EXT_MULTI_LINK) {
+                size_t body_len = len - 1;
+
+                if ((offset + body_len) > mle_total_len) {
+                    wifi_hal_info_print("%s:%d: Invalid calculation of total length in comparison to main Multi-Link IE - returning\n", __func__, __LINE__);
+                    free(storage);
+                    return NULL;
+                }
+
+                memcpy(storage + offset, ext + 1, body_len);
+                offset += body_len;
+            }
+        } else if ((id == WLAN_EID_FRAGMENT) && offset) {
+            if ((offset + len) > mle_total_len) {
+                wifi_hal_info_print("%s:%d: Invalid calculation of total length in comparison to extra Multi-Link IE - returning\n", __func__, __LINE__);
+                free(storage);
+                return NULL;
+            }
+
+            memcpy(storage + offset, &ies[pos + 2], len);
+            offset += len;
+        } else if (offset) {
+            break;
+        }
+
+        pos += 2 + len;
+    }
+
+    wifi_hal_info_print("%s:%d: Finished concatenating Multi-Link IEs\n", __func__, __LINE__);
+
+    if (offset <= MULTI_LINK_CONTROL_LEN) {
+        wifi_hal_info_print("%s:%d: Concatenated Multi-Link IEs are too short - returning\n", __func__, __LINE__);
+        free(storage);
+        return NULL;
+    }
+
+    wifi_hal_info_print("%s:%d: Checking Multi-Link control type\n", __func__, __LINE__);
+    const uint8_t *mle_body = storage;
+    size_t mle_len = offset;
+    uint16_t ml_control = mle_body[0] | (mle_body[1] << 8);
+
+    if ((ml_control & MULTI_LINK_CONTROL_TYPE_MASK) != MULTI_LINK_CONTROL_TYPE_BASIC) {
+        wifi_hal_info_print("%s:%d: Unexpected Multi-Link control type: %d - returning\n", __func__, __LINE__, ml_control);
+        free(storage);
+        return NULL;
+    }
+
+    wifi_hal_info_print("%s:%d: Checking amount of octets after Multi-Link control block\n", __func__, __LINE__);
+    const uint8_t *p = mle_body + MULTI_LINK_CONTROL_LEN;
+    size_t left = mle_len - MULTI_LINK_CONTROL_LEN;
+
+    if (left < 1) {
+        wifi_hal_info_print("%s:%d: Insufficient amount of octets left after Multi-Link control block: %ld - returning\n", __func__, __LINE__, left);
+        free(storage);
+        return NULL;
+    }
+
+    wifi_hal_info_print("%s:%d: Checking size of Multi-Link common block\n", __func__, __LINE__);
+    uint8_t common_len = p[0];
+
+    if ((common_len < 7) || (common_len > left)) {
+        wifi_hal_info_print("%s:%d: Invalid Multi-Link common block size: %d\n - returning", __func__, __LINE__, common_len);
+        free(storage);
+        return NULL;
+    }
+
+    wifi_hal_info_print("%s:%d: Allocating buffer for STA MLO parameters\n", __func__, __LINE__);
+    p += common_len;
+    left -= common_len;
+    sta_mlo_params_t *result = calloc(1, sizeof(sta_mlo_params_t));
+
+    if (!result) {
+        wifi_hal_info_print("%s:%d: Failed to allocate memory - returning\n", __func__, __LINE__);
+        free(storage);
+        return NULL;
+    }
+
+    result->assoc_link_id = 0xff;
+
+    for (int i = 0; i < MAX_NUM_MLD_LINKS; i++) {
+        result->mld_links[i].freq = -1;
+    }
+
+    wifi_hal_info_print("%s:%d: Parsing Per-STA parameters\n", __func__, __LINE__);
+
+    while (left >= 2) {
+        uint8_t sub_id  = p[0];
+        uint8_t sub_len = p[1];
+
+        if ((2 + sub_len) > left) {
+            break;
+        }
+
+        if (sub_id == MULTI_LINK_SUB_ELEM_ID_PER_STA_PROFILE) {
+            parse_per_sta(p + 2, sub_len, result);
+        }
+
+        p += 2 + sub_len;
+        left -= 2 + sub_len;
+    }
+
+    free(storage);
+    wifi_hal_info_print("%s:%d: Finished parsing Per-STA parameters - choosing link for association\n", __func__, __LINE__);
+
+    for (int i = 0; i < MAX_NUM_MLD_LINKS; i++) {
+        if (result->valid_links & BIT(i)) {
+            wifi_hal_info_print("%s:%d: Link for association: %d\n", __func__, __LINE__, i);
+            result->assoc_link_id = i;
+            break;
+        }
+    }
+
+    return result;
+}
+#endif /* CONFIG_IEEE80211BE */
+
 INT wifi_hal_sm_deinit(INT vap_index)
 {
     wifi_interface_info_t *interface = get_interface_by_vap_index(vap_index);
@@ -1133,6 +1506,7 @@ INT wifi_hal_sm_deinit(INT vap_index)
 
 INT wifi_hal_connect(INT ap_index, wifi_bss_info_t *bss)
 {
+    wifi_hal_info_print("%s:%d: !!!!!! 0<-\n", __func__, __LINE__);
     wifi_interface_info_t *interface;
     wifi_vap_info_t *vap;
     bssid_t null_mac = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
@@ -1143,12 +1517,14 @@ INT wifi_hal_connect(INT ap_index, wifi_bss_info_t *bss)
 
     if ((interface = get_interface_by_vap_index(ap_index)) == NULL) {
         wifi_hal_error_print("%s:%d:interface for ap index:%d not found\n", __func__, __LINE__, ap_index);
+        wifi_hal_info_print("%s:%d: !!!!!! 0->\n", __func__, __LINE__);
         return RETURN_ERR;
     }
 
     vap = &interface->vap_info;
     if (vap->vap_mode != wifi_vap_mode_sta) {
         wifi_hal_error_print("%s:%d:interface for vap index:%d not found\n", __func__, __LINE__, vap->vap_index);
+        wifi_hal_info_print("%s:%d: !!!!!! 0->\n", __func__, __LINE__);
         return WIFI_HAL_INVALID_ARGUMENTS;    // RDKB-45724 - Returns -4 when the ap index is not suitable for station mode
     }
 
@@ -1172,6 +1548,7 @@ INT wifi_hal_connect(INT ap_index, wifi_bss_info_t *bss)
         if (best == NULL) {
             pthread_mutex_unlock(&interface->scan_info_mutex);
             wifi_hal_error_print("%s:%d: Could not find bssid from scan data\n", __func__, __LINE__);
+            wifi_hal_info_print("%s:%d: !!!!!! 0->\n", __func__, __LINE__);
             return RETURN_ERR;
         }
 
@@ -1179,10 +1556,33 @@ INT wifi_hal_connect(INT ap_index, wifi_bss_info_t *bss)
         pthread_mutex_unlock(&interface->scan_info_mutex);
     }
 
+#ifdef CONFIG_IEEE80211BE
+    wifi_hal_info_print("%s:%d: !!!!!! Checking if MLD is enabled\n", __func__, __LINE__);
+    if (wifi_hal_is_mld_enabled(interface)) {
+        wifi_hal_info_print("%s:%d: !!!!!! MLD is enabled\n", __func__, __LINE__);
+        wifi_hal_info_print("%s:%d: Parsing MLO parameters\n", __func__, __LINE__);
+        sta_mlo_params_t *mlo_params = mlo_parse_from_ies(backhaul->ie, backhaul->ie_len);
+
+        if (mlo_params) {
+            wifi_hal_info_print("%s:%d: MLO parameters parsed - copying\n", __func__, __LINE__);
+            memcpy(&interface->mlo_params, mlo_params, sizeof(sta_mlo_params_t));
+            free(mlo_params);
+            mlo_params = NULL;
+        } else {
+            wifi_hal_info_print("%s:%d: MLO parameters were not parsed\n", __func__, __LINE__);
+            memset(&interface->mlo_params, 0, sizeof(sta_mlo_params_t));
+        }
+    } else {
+        wifi_hal_info_print("%s:%d: !!!!!! MLD is disabled\n", __func__, __LINE__);
+    }
+#endif /* CONFIG_IEEE80211BE */
+
     if (nl80211_connect_sta(interface) != 0) {
+        wifi_hal_info_print("%s:%d: !!!!!! 0->\n", __func__, __LINE__);
         return RETURN_ERR;
     }
 
+    wifi_hal_info_print("%s:%d: !!!!!! 0->\n", __func__, __LINE__);
     return RETURN_OK;
 }
 
@@ -1593,6 +1993,7 @@ INT _wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
 INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
 #endif
 {
+    wifi_hal_info_print("%s:%d: !!!!!! 0<-\n", __func__, __LINE__);
     wifi_radio_info_t *radio;
     wifi_interface_info_t *interface, *mbssid_tx_interface;
     wifi_vap_info_t *vap;
@@ -1621,12 +2022,14 @@ INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
     if (radio == NULL) {
         wifi_hal_error_print("%s:%d: radio index:%d failed not find radio\n", __func__, __LINE__,
             index);
+        wifi_hal_info_print("%s:%d: !!!!!! 0->\n", __func__, __LINE__);
         return RETURN_ERR;
     }
 #ifndef CONFIG_WIFI_EMULATOR
     if (false == radio->radio_presence) {
        wifi_hal_info_print("%s:%d: radio index:%d skip vap create due to ECO mode\n", __func__,
            __LINE__, radio->index);
+        wifi_hal_info_print("%s:%d: !!!!!! 0->\n", __func__, __LINE__);
        return RETURN_OK;
     }
 #endif
@@ -1646,6 +2049,7 @@ INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
         if (vap->vap_mode == wifi_vap_mode_ap) {
             if (validate_wifi_interface_vap_info_params(vap, msg, sizeof(msg)) != RETURN_OK) {
                 wifi_hal_error_print("%s:%d:Failed to validate interface vap_info params for vap_index: %d on radio index: %d. %s\n", __func__, __LINE__, vap->vap_index, index, msg);
+                wifi_hal_info_print("%s:%d: !!!!!! 0->\n", __func__, __LINE__);
                 return WIFI_HAL_INVALID_ARGUMENTS;
             }
         }
@@ -1725,12 +2129,17 @@ INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
         if (nl80211_update_interface(interface) != 0) {
             wifi_hal_error_print("%s:%d: interface:%s failed to set mode %d\n",__func__, __LINE__,
                 interface_name, vap->vap_mode);
+            wifi_hal_info_print("%s:%d: !!!!!! 0->\n", __func__, __LINE__);
             return RETURN_ERR;
         }
 
         wifi_hal_info_print("%s:%d: interface:%s radio configured:%d radio enabled:%d\n",
             __func__, __LINE__, interface_name, radio->configured, radio->oper_param.enable);
+#ifdef CONFIG_IEEE80211BE
+        if (radio->oper_param.enable) {
+#else
         if (radio->configured && radio->oper_param.enable) {
+#endif /* CONFIG_IEEE80211BE */
             wifi_hal_info_print("%s:%d: interface:%s set up\n", __func__, __LINE__,
                 interface_name);
             if (nl80211_interface_enable(interface_name, true) != 0) {
@@ -1782,6 +2191,7 @@ INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
             if (update_hostap_interface_params(interface) != RETURN_OK) {
                 wifi_hal_error_print("%s:%d: interface:%s failed to update hostapd params\n",
                     __func__, __LINE__, interface_name);
+                wifi_hal_info_print("%s:%d: !!!!!! 0->\n", __func__, __LINE__);
                 return RETURN_ERR;
             }
 
@@ -1808,6 +2218,7 @@ INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
                 if (update_hostap_interfaces(radio)!= RETURN_OK) {
                     wifi_hal_error_print("%s:%d: radio index:%d failed to update hostapd "
                         "interfaces\n", __func__, __LINE__, radio->index);
+                    wifi_hal_info_print("%s:%d: !!!!!! 0->\n", __func__, __LINE__);
                     return RETURN_ERR;
                 }
                 if (vap->u.bss_info.enabled && radio->configured && radio->oper_param.enable) {
@@ -1866,6 +2277,7 @@ INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
                 if (nl80211_create_bridge(interface->name, vap->bridge_name) != 0) {
                     wifi_hal_error_print("%s:%d: interface:%s failed to create bridge:%s\n",
                         __func__, __LINE__, interface->name, vap->bridge_name);
+                    wifi_hal_info_print("%s:%d: !!!!!! 0->\n", __func__, __LINE__);
                     return RETURN_ERR;
                 }
                 wifi_hal_info_print("%s:%d: interface:%s set bridge %s up\n", __func__, __LINE__,
@@ -1873,6 +2285,7 @@ INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
                 if (nl80211_interface_enable(vap->bridge_name, true) != 0) {
                     wifi_hal_error_print("%s:%d: interface:%s failed to set bridge %s up\n",
                         __func__, __LINE__, interface->name, vap->bridge_name);
+                    wifi_hal_info_print("%s:%d: !!!!!! 0->\n", __func__, __LINE__);
                     return RETURN_ERR;
                 }
             }
@@ -1882,7 +2295,11 @@ INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
             nl80211_set_mac(interface);
             nl80211_interface_enable(interface->name, true);
 #endif
+#ifndef CONFIG_IEEE80211BE
+            if (radio->oper_param.enable) {
+#else
             if (radio->configured && radio->oper_param.enable) {
+#endif /* CONFIG_IEEE80211BE */
                 wifi_hal_info_print("%s:%d: interface:%s set operstate 1\n", __func__,
                     __LINE__, interface_name);
                 wifi_drv_set_operstate(interface, 1);
@@ -1927,6 +2344,7 @@ INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
             if (wifi_setApMacAddressControlMode(vap->vap_index, filtermode) < 0) {
                 wifi_hal_error_print("%s:%d: vap index:%d failed to set mac filter\n", __func__,
                     __LINE__, vap->vap_index);
+                wifi_hal_info_print("%s:%d: !!!!!! 0->\n", __func__, __LINE__);
                 return RETURN_ERR;
             }
 #endif // NL80211_ACL
@@ -1958,6 +2376,7 @@ INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
         set_vap_params_fn(index, map);
     }
 
+    wifi_hal_info_print("%s:%d: !!!!!! 0->\n", __func__, __LINE__);
     return ret;
 }
 
@@ -2572,6 +2991,7 @@ INT wifi_hal_sendDataFrame( int vap_id, unsigned char *dmac, unsigned char *data
 
 INT wifi_hal_startScan(wifi_radio_index_t index, wifi_neighborScanMode_t scan_mode, INT dwell_time, UINT num, UINT *chan_list)
 {
+    wifi_hal_stats_info_print("%s:%d: !!!!!! 0<-\n", __func__, __LINE__);
     wifi_radio_info_t *radio;
     wifi_interface_info_t *interface;
     wifi_vap_info_t *vap;
@@ -2589,12 +3009,14 @@ INT wifi_hal_startScan(wifi_radio_index_t index, wifi_neighborScanMode_t scan_mo
 
     if (dwell_time < 0) {
         wifi_hal_stats_error_print("%s:%d: invalide dwell time: %d\n", __func__, __LINE__, dwell_time);
+        wifi_hal_stats_info_print("%s:%d: !!!!!! 0->\n", __func__, __LINE__);
         return WIFI_HAL_INVALID_ARGUMENTS;
     }
 
     radio = get_radio_by_rdk_index(index);
     if (radio == NULL) {
         wifi_hal_stats_error_print("%s:%d:Could not find radio for index: %d\n", __func__, __LINE__, index);
+        wifi_hal_stats_info_print("%s:%d: !!!!!! 0->\n", __func__, __LINE__);
         return RETURN_ERR; 
     }
 
@@ -2613,6 +3035,7 @@ INT wifi_hal_startScan(wifi_radio_index_t index, wifi_neighborScanMode_t scan_mo
     if (found == false) {
         wifi_hal_stats_error_print("%s:%d:Could not find sta interface on radio index: %d, start scan failure\n", 
             __func__, __LINE__, index);
+        wifi_hal_stats_info_print("%s:%d: !!!!!! 0->\n", __func__, __LINE__);
         return RETURN_ERR;
     }
 
@@ -2621,6 +3044,7 @@ INT wifi_hal_startScan(wifi_radio_index_t index, wifi_neighborScanMode_t scan_mo
         wifi_hal_stats_error_print("%s:%d:Not allowing scan on radio_index: %d because not "
             "matching with interface->rdk_radio_index:%d\n",
             __func__, __LINE__, index, interface->rdk_radio_index);
+        wifi_hal_stats_info_print("%s:%d: !!!!!! 0->\n", __func__, __LINE__);
         return RETURN_ERR;
     }
 #endif
@@ -2633,10 +3057,12 @@ INT wifi_hal_startScan(wifi_radio_index_t index, wifi_neighborScanMode_t scan_mo
     } else if (scan_mode == WIFI_RADIO_SCAN_MODE_OFFCHAN) {
         if ((num == 0) || (chan_list == NULL)) {
             wifi_hal_stats_error_print("%s:%d: Channels not speified for offchannel scan mode\n", __func__, __LINE__);
+            wifi_hal_stats_info_print("%s:%d: !!!!!! 0->\n", __func__, __LINE__);
             return RETURN_ERR; 
         }
     } else {
         wifi_hal_stats_error_print("%s:%d: Incorrect scan mode\n", __func__, __LINE__);
+        wifi_hal_stats_info_print("%s:%d: !!!!!! 0->\n", __func__, __LINE__);
         return RETURN_ERR; 
     }
 
@@ -2672,6 +3098,7 @@ INT wifi_hal_startScan(wifi_radio_index_t index, wifi_neighborScanMode_t scan_mo
 
     if (freq_num == 0) {
         wifi_hal_stats_error_print("%s:%d: No valid channels\n", __func__, __LINE__);
+        wifi_hal_stats_info_print("%s:%d: !!!!!! 0->\n", __func__, __LINE__);
         return RETURN_ERR;
     }
 
@@ -2682,6 +3109,7 @@ INT wifi_hal_startScan(wifi_radio_index_t index, wifi_neighborScanMode_t scan_mo
     hash_map_cleanup(interface->scan_info_map);
     pthread_mutex_unlock(&interface->scan_info_mutex);
 
+    wifi_hal_stats_info_print("%s:%d: !!!!!! 0->\n", __func__, __LINE__);
     return (nl80211_start_scan(interface, NL80211_SCAN_FLAG_COLOCATED_6GHZ, freq_num, freq_list, dwell_time, 1, ssid_list) == 0) ? RETURN_OK:RETURN_ERR;
 }
 
