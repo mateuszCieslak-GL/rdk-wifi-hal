@@ -5637,7 +5637,13 @@ bool wifi_hal_is_mld_enabled(wifi_interface_info_t *interface)
 
     if (interface->vap_info.vap_mode == wifi_vap_mode_ap) {
         return interface->vap_info.u.bss_info.mld_info.common_info.mld_enable;
+    } else { //wifi_vap_mode_sta or _monitor mode
+        wifi_hal_error_print("%s:%d: vap_mode : %s \n", __func__, __LINE__, (interface->vap_info.vap_mode == wifi_vap_mode_sta) ? "sta" : "monitor");
+        // return interface->vap_info.u.sta_info.mld_info.common_info.mld_enable
+        wifi_hal_error_print("%s: For now returning true, vap_index %d,name:%s \n", __func__, interface->vap_info.vap_index, interface->vap_info.vap_name);
+        return true;
     }
+        wifi_hal_error_print("%s:%d: 0->\n", __func__, __LINE__);
 
     return false;
 }

@@ -140,7 +140,10 @@ static void nl80211_new_station_event(wifi_interface_info_t *interface, struct n
         ies_len = nla_len(tb[NL80211_ATTR_IE]);
     } else {
         wifi_hal_error_print("%s:%d:ie attribute not present\n", __func__, __LINE__);
-        return;
+        wifi_hal_error_print("%s:%d: for MLO it should be enabled later, continuing\n", __func__, __LINE__);
+        ies_len = 0;
+        ies = NULL;
+       // return;
     }
     wifi_hal_error_print("%s:%d: New station:%s, sending event: EVENT_ASSOC\n", __func__, __LINE__,
         to_mac_str(mac, mac_str));
@@ -154,9 +157,11 @@ static void nl80211_new_station_event(wifi_interface_info_t *interface, struct n
     if (interface->vap_info.vap_mode != wifi_vap_mode_ap || is_wifi_hal_vap_mesh_sta(interface->vap_info.vap_index)) {
 #if defined(BANANA_PI_PORT) && (HOSTAPD_VERSION >= 211)
         supplicant_event(&interface->wpa_s, EVENT_ASSOC, &event);
+        wifi_hal_error_print("%s:%d: New station, called suuplicant_event\n", __func__, __LINE__);
 #endif
     } else {
         wpa_supplicant_event(&interface->u.ap.hapd, EVENT_ASSOC, &event);
+        wifi_hal_error_print("%s:%d: New station, called wpa_suuplicant_event\n", __func__, __LINE__);
     }
 }
 

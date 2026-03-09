@@ -107,9 +107,18 @@ int platform_pre_init()
 int platform_post_init(wifi_vap_info_map_t *vap_map)
 {
     wifi_hal_dbg_print("%s:%d \n",__func__,__LINE__);    
-    system("brctl addif brlan0 wifi0");
-    system("brctl addif brlan0 wifi1");
-    system("brctl addif brlan0 wifi2");
+
+    //Only bridge if NOT in station mode
+    //Ideally-Check the specific vap_type/device networking mode)
+    /*for (int i = 0; i < vap_map->num_vaps; i++) {
+        if (vap_map->vap_array[i].vap_mode == wifi_vap_mode_ap) {
+            ... = get_interface_by_vap_index(vap_map->vap_array[i].vap_index);
+            system...
+        }
+    } */   
+    // system("brctl addif brlan0 wifi0");
+    // system("brctl addif brlan0 wifi1"); 
+    // system("brctl addif brlan0 wifi2");
     return 0;
 }
 
@@ -354,7 +363,7 @@ int platform_pre_create_vap(wifi_radio_index_t index, wifi_vap_info_map_t *map)
 int platform_flags_init(int *flags)
 {
     wifi_hal_dbg_print("%s:%d \n",__func__,__LINE__);
-    *flags = PLATFORM_FLAGS_STA_INACTIVITY_TIMER | PLATFORM_FLAGS_CONTROL_PORT_FRAME;
+    *flags = PLATFORM_FLAGS_STA_INACTIVITY_TIMER /*| PLATFORM_FLAGS_CONTROL_PORT_FRAME*/;
     return 0;
 }
 
