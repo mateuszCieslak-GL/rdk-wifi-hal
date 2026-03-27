@@ -1258,7 +1258,7 @@ static int parse_freq_from_ies(const uint8_t *sub, size_t sub_len)
 
 static void parse_per_sta(const uint8_t *sub, size_t sub_len, sta_mlo_params_t *params)
 {
-    if ((sub_len < MLE_STA_CTRL_LEN) || !sub) {
+    if ((sub_len < MLE_STA_CTRL_LEN + 1) || !sub) {
         wifi_hal_info_print("%s:%d: Invalid input for parsing Per-STA parameters - returning\n", __func__, __LINE__);
         return;
     }
@@ -1430,9 +1430,9 @@ static sta_mlo_params_t *mlo_parse_from_ies(const uint8_t *ies, size_t ies_len)
         return NULL;
     }
 
-    wifi_hal_info_print("%s:%d: Allocating buffer for STA MLO parameters\n", __func__, __LINE__);
     p += common_len;
     left -= common_len;
+    wifi_hal_info_print("%s:%d: Allocating buffer for STA MLO parameters, left=%ld\n", __func__, __LINE__, left);
     sta_mlo_params_t *result = calloc(1, sizeof(sta_mlo_params_t));
 
     if (!result) {
@@ -1449,11 +1449,16 @@ static sta_mlo_params_t *mlo_parse_from_ies(const uint8_t *ies, size_t ies_len)
 
     wifi_hal_info_print("%s:%d: Parsing Per-STA parameters\n", __func__, __LINE__);
 
-    while (left >= 2) {
+    while (left > 2) {
+        if (left < (BASIC_MLE_STA_PROF_STA_MAC_IDX )) {
+              wifi_hal_info_print("%s:%d: Only left bytes %ld remaining, breaking\n", __func__, __LINE__, left);
+              break;
+          }
         uint8_t sub_id  = p[0];
         uint8_t sub_len = p[1];
 
         if ((2 + sub_len) > left) {
+              wifi_hal_info_print("%s:%d: Only left bytes %ld remaining, breaking. Subid %d, sub_len %d\n", __func__, __LINE__, left, sub_id, sub_len);
             break;
         }
 
@@ -1466,6 +1471,7 @@ static sta_mlo_params_t *mlo_parse_from_ies(const uint8_t *ies, size_t ies_len)
     }
 
     free(storage);
+
     wifi_hal_info_print("%s:%d: Finished parsing Per-STA parameters - choosing link for association\n", __func__, __LINE__);
 
     for (int i = 0; i < MAX_NUM_MLD_LINKS; i++) {
@@ -1557,20 +1563,21 @@ INT wifi_hal_connect(INT ap_index, wifi_bss_info_t *bss)
     }
 
 #ifdef CONFIG_IEEE80211BE
+    int ret = 0;
     wifi_hal_info_print("%s:%d: !!!!!! Checking if MLD is enabled\n", __func__, __LINE__);
     if (wifi_hal_is_mld_enabled(interface)) {
         wifi_hal_info_print("%s:%d: !!!!!! MLD is enabled\n", __func__, __LINE__);
         wifi_hal_info_print("%s:%d: Parsing MLO parameters\n", __func__, __LINE__);
-        sta_mlo_params_t *mlo_params = mlo_parse_from_ies(backhaul->ie, backhaul->ie_len);
-
+        sta_mlo_params_t *mlo_params = NULL;
+        mlo_params = mlo_parse_from_ies(backhaul->ie, backhaul->ie_len);
         if (mlo_params) {
-            wifi_hal_info_print("%s:%d: MLO parameters parsed - copying\n", __func__, __LINE__);
+            wifi_hal_info_print("%s:%d: MLO parameters parsed - copying, retv = %d\n", __func__, __LINE__, ret);
             memcpy(&interface->mlo_params, mlo_params, sizeof(sta_mlo_params_t));
             free(mlo_params);
             mlo_params = NULL;
         } else {
-            wifi_hal_info_print("%s:%d: MLO parameters were not parsed\n", __func__, __LINE__);
-            memset(&interface->mlo_params, 0, sizeof(sta_mlo_params_t));
+                wifi_hal_info_print("%s:%d: MLO parameters were not parsed\n", __func__, __LINE__);
+                //memset(&interface->mlo_params, 0, sizeof(sta_mlo_params_t))
         }
     } else {
         wifi_hal_info_print("%s:%d: !!!!!! MLD is disabled\n", __func__, __LINE__);
@@ -2104,13 +2111,16 @@ INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
         interface_name = wifi_hal_get_interface_name(interface);
 
 #ifdef CONFIG_GENERIC_MLO
-        // VAP down removes MLO links, so restrict down of interface to sta mode only
-        if (vap->vap_mode == wifi_vap_mode_sta) {
+        // VAP down removes MLO links, so restrict down of interface to non-mlo sta mode only
+    if (vap->vap_mode == wifi_vap_mode_sta && wifi_hal_is_mld_enabled(interface)) {
+        wifi_hal_info_print("%s:%d: interface:%s is MLO, ensuring link is UP\n", __func__, __LINE__, interface->name);
+        nl80211_interface_enable(interface->name, true); // Ensure the link has a carrier
+    } else {
 #endif
-            wifi_hal_info_print("%s:%d: interface:%s set down !!!\n", __func__, __LINE__, interface->name);
-            nl80211_interface_enable(interface->name, false);
+        wifi_hal_info_print("%s:%d: interface:%s set down !!!\n", __func__, __LINE__, interface->name);
+        nl80211_interface_enable(interface->name, false);
 #ifdef CONFIG_GENERIC_MLO
-        }
+    }
 #endif
 
 #if  !defined(CONFIG_WIFI_EMULATOR) && !defined(CONFIG_WIFI_EMULATOR_EXT_AGENT)
@@ -2310,6 +2320,8 @@ INT wifi_hal_createVAP(wifi_radio_index_t index, wifi_vap_info_map_t *map)
             } else {
                 wifi_hal_info_print("%s:%d: interface:%s set down\n", __func__, __LINE__,
                     interface_name);
+                wifi_hal_info_print("%s:%d: radio->configured %d, radio enable %d\n", __func__, __LINE__,
+                    radio->configured, radio->oper_param.enable);
                 nl80211_interface_enable(interface_name, false);
             }
 #endif //CONFIG_WIFI_EMULATOR
