@@ -2250,7 +2250,7 @@ int update_hostap_config_params(wifi_radio_info_t *radio)
 int update_hostap_interface_params(wifi_interface_info_t *interface)
 {
     int ret = RETURN_ERR;
-
+    wifi_hal_info_print("%s:%d: \n", __func__, __LINE__);
 #ifdef CONFIG_GENERIC_MLO
     if (wifi_hal_is_mld_enabled(interface)) {
         wifi_interface_info_t *first_interface = wifi_hal_get_first_mld_interface(interface);
