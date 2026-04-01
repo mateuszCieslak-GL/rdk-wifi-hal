@@ -5673,6 +5673,7 @@ int wifi_hal_get_mld_link_id(wifi_interface_info_t *interface)
         wifi_hal_error_print("%s:%d: NULL interface pointer\n", __func__, __LINE__);
         return NL80211_DRV_LINK_ID_NA;
     }
+        wifi_hal_info_print("%s:%d: check is mld enabled\n", __func__, __LINE__);
 
     if (!wifi_hal_is_mld_enabled(interface)) {
         return NL80211_DRV_LINK_ID_NA;
@@ -5704,6 +5705,7 @@ wifi_interface_info_t *wifi_hal_get_first_mld_interface(wifi_interface_info_t *i
 {
     wifi_radio_info_t *radio;
     wifi_interface_info_t *interface_iter;
+        wifi_hal_info_print("%s:%d: enter \n", __func__, __LINE__);
 
     if (!wifi_hal_is_mld_enabled(interface)) {
         return interface;
@@ -5737,6 +5739,7 @@ uint8_t *wifi_hal_get_mld_mac_address(wifi_interface_info_t *interface)
         wifi_hal_error_print("%s:%d: NULL interface pointer\n", __func__, __LINE__);
         return NULL;
     }
+        wifi_hal_info_print("%s:%d: Enter\n", __func__, __LINE__);
 
     if (!wifi_hal_is_mld_enabled(interface)) {
         return NULL;
@@ -5776,6 +5779,7 @@ wifi_interface_info_t *wifi_hal_get_mld_interface_by_link_id(wifi_interface_info
     if (link_id < 0) {
         return interface;
     }
+        wifi_hal_dbg_print("%s:%d: enter\n", __func__, __LINE__);
 
     if (!wifi_hal_is_mld_enabled(interface)) {
         return interface;
@@ -5816,6 +5820,7 @@ wifi_interface_info_t *wifi_hal_get_mld_interface_by_freq(wifi_interface_info_t 
     if (freq == 0) {
         return interface;
     }
+wifi_hal_dbg_print("%s:%d: enter\n", __func__, __LINE__);
 
     if (!wifi_hal_is_mld_enabled(interface)) {
         return interface;
@@ -5855,6 +5860,7 @@ wifi_interface_info_t *wifi_hal_get_mld_link_interface_by_mac(wifi_interface_inf
 {
     wifi_radio_info_t *radio;
     wifi_interface_info_t *interface_iter;
+wifi_hal_dbg_print("%s:%d: enter\n", __func__, __LINE__);
 
     if (!wifi_hal_is_mld_enabled(interface)) {
         return memcmp(interface->mac, mac, sizeof(mac_address_t)) == 0 ? interface : NULL;
