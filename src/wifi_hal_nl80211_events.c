@@ -152,14 +152,25 @@ static void nl80211_new_station_event(wifi_interface_info_t *interface, struct n
     event.assoc_info.req_ies = ies;
     event.assoc_info.req_ies_len = ies_len;
     event.assoc_info.addr = mac;
-    wifi_hal_dbg_print("%s:%d: New station ies_len:%ld, ies:%p\n", __func__, __LINE__, ies_len, ies);
-    notify_assoc_data(interface, tb, event);
     if (interface->vap_info.vap_mode != wifi_vap_mode_ap || is_wifi_hal_vap_mesh_sta(interface->vap_info.vap_index)) {
 #if defined(BANANA_PI_PORT) && (HOSTAPD_VERSION >= 211)
+        /* * RDK-B LEGACY BUG: For MTK drivers, NEW_STATION is fired during hardware setup,
+         * LONG before SAE authentication completes. Firing EVENT_ASSOC here aborts
+         * wpa_supplicant's SAE State Machine and breaks WPA3.
+         */
+        wifi_hal_dbg_print("%s:%d: Ignoring NEW_STATION for STA to prevent premature EVENT_ASSOC!\n", 
+                           __func__, __LINE__);
+/*#else //to do - is it needed for non-banana pi sta connections?//in case of bpi - early return, separate case
+    wifi_hal_dbg_print("%s:%d: New station ies_len:%ld, ies:%p\n", __func__, __LINE__, ies_len, ies);
+    notify_assoc_data(interface, tb, event);
+
         supplicant_event(&interface->wpa_s, EVENT_ASSOC, &event);
         wifi_hal_error_print("%s:%d: New station, called suuplicant_event\n", __func__, __LINE__);
-#endif
+*/#endif
     } else {
+    wifi_hal_dbg_print("%s:%d: New station ies_len:%ld, ies:%p\n", __func__, __LINE__, ies_len, ies);
+    notify_assoc_data(interface, tb, event);
+
         wpa_supplicant_event(&interface->u.ap.hapd, EVENT_ASSOC, &event);
         wifi_hal_error_print("%s:%d: New station, called wpa_suuplicant_event\n", __func__, __LINE__);
     }
