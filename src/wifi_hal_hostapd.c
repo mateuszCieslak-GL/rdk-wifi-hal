@@ -40,6 +40,9 @@
 #include "crypto/sha1.h"
 #include "eap_peer/eap_methods.h"
 
+//bananapi
+#include "wpa_supplicant/scan.h"
+
 #define MACF      "%02x:%02x:%02x:%02x:%02x:%02x"
 #define MAC_TO_MACF(addr)    addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]
 #define RADIUS_FALLBACK_TIMER_IN_SECS   12*60*60
@@ -2372,11 +2375,43 @@ static enum wpa_states wpa_sm_sta_get_state(void *ctx)
 
     return interface->u.sta.state;
 }
+/* workaround for BRCM-AP race condition;
+ * he AP retransmits M3 four times (retry limit), then disconnects with reason 15
+ * (4-way handshake timeout). The AP logs from the first attempt show the BRCM FullMAC
+ * in a bad state: WLC_SCB_DEAUTHORIZE error (-30)   ← first deauth cleanup failed
+ * wlc_ulmu_admit_ready_check: SCB:02:02:23:0b:30:1e admit fail: scb del in progress
+The SCB for link MAC 02:02:23:0b:30:1e is mid-deletion during the second attempt. M4 transmits successfully at the MAC layer from the STA side (send eapol key ... success), but the AP-side BRCM firmware likely cannot enqueue or deliver it to the upper stack because the SCB isn't in a clean state yet.
+*/
+static void wpa_sta_delayed_reconnect_cb(void *eloop_ctx, void *timeout_ctx)
+{
+    wifi_interface_info_t *interface = (wifi_interface_info_t *)eloop_ctx;
+    wifi_hal_info_print("wpa_sta_delayed_reconnect_cb: triggering reconnect\n");
+
+    /* Reset MLO state so next attempt re-primes cleanly */
+    interface->mlo_assoc_event_delivered = 0;
+
+    wpa_supplicant_req_scan(&interface->wpa_s, 0, 0); 
+}
 
 static void wpa_sm_sta_deauthenticate(void *ctx, u16 reason_code)
 {
-    wifi_hal_dbg_print("%s:%d: Enter\n", __func__, __LINE__); 
+    wifi_interface_info_t *interface = (wifi_interface_info_t *)ctx;
+
+    wifi_hal_info_print("wpa_sm_sta_deauthenticate: Enter, reason=%u\n", reason_code);
+
+    /* 1. Cancel the wpa_supplicant auth timeout so it doesn't race
+          against our delayed reconnect */
+    //eloop_cancel_timeout(wpa_supplicant_timeout, &interface->wpa_s, NULL);
+    wpa_supplicant_cancel_auth_timeout(&interface->wpa_s);
+    /* 2. Prevent the M3-retransmission loop: mark state as disconnected
+          so subsequent M3 arrivals are dropped rather than re-answered */
+    interface->u.sta.state = WPA_DISCONNECTED;
+
+    /* 3. Schedule reconnect with backoff — give AP SCB ~300ms to clean up */
+    eloop_cancel_timeout(wpa_sta_delayed_reconnect_cb, interface, NULL);
+    eloop_register_timeout(0, 300000, wpa_sta_delayed_reconnect_cb, interface, NULL);
 }
+
 
 #ifdef HOSTAPD_2_11 //2.11
 static int wpa_sm_sta_set_key(void *ctx, int link_id, enum wpa_alg alg,
@@ -2608,13 +2643,13 @@ static int wpa_sm_sta_get_beacon_ie(void *ctx)
 static int wpa_sm_sta_mlme_setprotection(void *ctx, const u8 *addr,
                                             int protection_type, int key_type)
 {
-    wifi_hal_dbg_print("%s:%d: Enter\n", __func__, __LINE__);
+    wifi_hal_dbg_print("%s:%d: Enter, empty stub\n", __func__, __LINE__);
     return 0;
 }
 
 static void wpa_sm_sta_cancel_auth_timeout(void *ctx)
 {
-    wifi_hal_dbg_print("%s:%d: Enter\n", __func__, __LINE__);
+    wifi_hal_dbg_print("%s:%d: Enter, empty stub\n", __func__, __LINE__);
 }
 
 static int wpa_sm_sta_key_mgmt_set_pmk(void *ctx, const u8 *pmk,
@@ -2636,7 +2671,7 @@ static int wpa_sm_sta_add_pmkid(void *_wpa_s, void *network_ctx,
                                             const u8 *pmk, size_t pmk_len)
 #endif
 {
-    wifi_hal_dbg_print("%s:%d: Enter\n", __func__, __LINE__);
+    wifi_hal_dbg_print("%s:%d: Enter, empty stub\n", __func__, __LINE__);
     return 0;
 }
 
@@ -2644,7 +2679,7 @@ static int wpa_sm_sta_remove_pmkid(void *_wpa_s, void *network_ctx,
                                             const u8 *bssid, const u8 *pmkid,
                                             const u8 *fils_cache_id)
 {
-    wifi_hal_dbg_print("%s:%d: Enter\n", __func__, __LINE__);
+    wifi_hal_dbg_print("%s:%d: Enter, empty stub\n", __func__, __LINE__);
     return 0;
 }
 

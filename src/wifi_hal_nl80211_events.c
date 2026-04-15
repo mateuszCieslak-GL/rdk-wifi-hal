@@ -154,12 +154,26 @@ static void nl80211_new_station_event(wifi_interface_info_t *interface, struct n
     event.assoc_info.addr = mac;
     if (interface->vap_info.vap_mode != wifi_vap_mode_ap || is_wifi_hal_vap_mesh_sta(interface->vap_info.vap_index)) {
 #if defined(BANANA_PI_PORT) && (HOSTAPD_VERSION >= 211)
+#ifdef CONFIG_IEEE80211BE
+    if (interface->mlo_params.valid_links > 0) {
         /* * RDK-B LEGACY BUG: For MTK drivers, NEW_STATION is fired during hardware setup,
          * LONG before SAE authentication completes. Firing EVENT_ASSOC here aborts
-         * wpa_supplicant's SAE State Machine and breaks WPA3.
-         */
-        wifi_hal_dbg_print("%s:%d: Ignoring NEW_STATION for STA to prevent premature EVENT_ASSOC!\n", 
-                           __func__, __LINE__);
+         * wpa_supplicant's SAE State Machine and breaks WPA3. Thus, we suppress
+         * EVENT_ASSOC from NEW_STATION during authenticating — the real EVENT_ASSOC comes from
+         * NL80211_CMD_ASSOCIATE (nl80211_associate_event). */
+        if (interface->wpa_s.wpa_state == WPA_AUTHENTICATING) {
+            wifi_hal_info_print("%s: Ignoring NEW_STATION during MLO SAE auth\n",
+                                __func__);
+            return;
+        }
+    }
+    wifi_hal_dbg_print("%s:%d: New station ies_len:%ld, ies:%p\n", __func__, __LINE__, ies_len, ies);
+    notify_assoc_data(interface, tb, event);
+
+        supplicant_event(&interface->wpa_s, EVENT_ASSOC, &event);
+        wifi_hal_error_print("%s:%d: New station, called suuplicant_event\n", __func__, __LINE__);
+
+#endif
 /*#else //to do - is it needed for non-banana pi sta connections?//in case of bpi - early return, separate case
     wifi_hal_dbg_print("%s:%d: New station ies_len:%ld, ies:%p\n", __func__, __LINE__, ies_len, ies);
     notify_assoc_data(interface, tb, event);
@@ -190,6 +204,20 @@ static void nl80211_del_station_event(wifi_interface_info_t *interface, struct n
         return;
     }
     memcpy(mac, nla_data(attr), sizeof(mac_address_t));
+#ifdef CONFIG_IEEE80211BE
+    /* Suppress during MLO SAE if we have sent a commit but not yet
+     * received a confirm. Check: auth was sent and no assoc yet. */
+     //Note: !is_zero_ether_addr(backhaul->bssid) check might need to be added
+     // Check on interface->wpa_s.bssid fails if first connection fails.
+     // After 1st attempt is teared down via EVENT_DISASSOC, wpa_supplicant clears wpa_s->bssid to all-zeros as part of its disconnection cleanup.
+     // When attempt 2 starts and DEL_STATION from attempt 1's station removal arrives 2 seconds in, wpa_state is correctly WPA_AUTHENTICATING but bssid is still zeros. 
+    if (interface->mlo_params.valid_links > 0 &&
+        interface->wpa_s.wpa_state == WPA_AUTHENTICATING) {
+        wifi_hal_info_print("%s: Suppressing DEL_STATION during MLO SAE (state=AUTHENTICATING)\n",
+                            __func__);
+        return;
+    }
+#endif
     wifi_hal_error_print("%s:%d: DEL station:%s, sending event: EVENT_DISASSOC\n", __func__, __LINE__,
         to_mac_str(mac, mac_str));
 
@@ -243,6 +271,16 @@ static void nl80211_associate_event(wifi_interface_info_t *interface, struct nla
     memset(&event, 0, sizeof(event));
     wifi_hal_dbg_print("%s:%d: Enter \n", __func__, __LINE__);
     if (tb[NL80211_ATTR_FRAME]) {
+#ifdef CONFIG_IEEE80211BE
+    if (interface->mlo_params.valid_links > 0 &&
+        interface->mlo_assoc_event_delivered &&
+        interface->wpa_s.wpa_state >= WPA_ASSOCIATED) {
+        wifi_hal_info_print("%s: MLO assoc event already delivered "
+                            "(state=%d), suppressing duplicate\n",
+                            __func__, interface->wpa_s.wpa_state);
+        return;
+    }
+#endif
         len = nla_len(tb[NL80211_ATTR_FRAME]);
         mgmt = (const struct ieee80211_mgmt *) nla_data(tb[NL80211_ATTR_FRAME]);
         status = le_to_host16(mgmt->u.assoc_resp.status_code);
@@ -306,23 +344,49 @@ static void nl80211_authenticate_event(wifi_interface_info_t *interface, struct 
 {
     union wpa_event_data event;
     const struct ieee80211_mgmt *mgmt;
-
     memset(&event, 0, sizeof(event));
-    wifi_hal_dbg_print("%s:%d: Enter \n", __func__, __LINE__);
-    if (tb[NL80211_ATTR_FRAME]) {
-        mgmt = (const struct ieee80211_mgmt *) nla_data(tb[NL80211_ATTR_FRAME]);
-        memcpy(event.auth.peer, mgmt->sa, ETH_ALEN);
-        event.auth.auth_type = le_to_host16(mgmt->u.auth.auth_alg);
-        event.auth.auth_transaction = le_to_host16(mgmt->u.auth.auth_transaction);
-        event.auth.status_code = le_to_host16(mgmt->u.auth.status_code);
-        size_t len = nla_len(tb[NL80211_ATTR_FRAME]);
-        if (len > 24 + sizeof(mgmt->u.auth)) {
-            event.auth.ies = mgmt->u.auth.variable;
-            event.auth.ies_len = len - 24 - sizeof(mgmt->u.auth);
-        }
 
-    } else {
-        wifi_hal_dbg_print("%s:%d: NO FRAME \n", __func__, __LINE__);
+    wifi_hal_dbg_print("%s:%d: Enter \n", __func__, __LINE__);
+
+    if (!tb[NL80211_ATTR_FRAME]) {
+        wifi_hal_dbg_print("%s:%d: NO FRAME - synthetic timeout event, ignoring\n",
+                           __func__, __LINE__);
+        return; /* Do NOT deliver zero-BSSID event to sme_event_auth */
+    }
+
+    size_t frame_len = nla_len(tb[NL80211_ATTR_FRAME]);
+    mgmt = (const struct ieee80211_mgmt *) nla_data(tb[NL80211_ATTR_FRAME]);
+
+    /* Minimum: 24B MAC header + 6B fixed auth body */
+    if (frame_len < 30) {
+        wifi_hal_dbg_print("%s:%d: Frame too short (%zu)\n", __func__, __LINE__, frame_len);
+        return;
+    }
+
+    memcpy(event.auth.peer, mgmt->sa, ETH_ALEN);
+    event.auth.auth_type        = le_to_host16(mgmt->u.auth.auth_alg);
+    event.auth.auth_transaction = le_to_host16(mgmt->u.auth.auth_transaction);
+    event.auth.status_code      = le_to_host16(mgmt->u.auth.status_code);
+
+    wifi_hal_dbg_print("%s:%d: peer=" MACSTR " alg=%u trans=%u status=%u\n",
+                       __func__, __LINE__,
+                       MAC2STR(event.auth.peer),
+                       event.auth.auth_type,
+                       event.auth.auth_transaction,
+                       event.auth.status_code);
+
+    size_t variable_len = frame_len - 24 - sizeof(mgmt->u.auth);
+    if (variable_len > 0) {
+        /*
+         * For SAE: mgmt->u.auth.variable contains raw SAE payload
+         * (scalar, element, token...) followed by optional IEs.
+         * Set BOTH fields — sme_event_auth reads auth_data for the
+         * SAE exchange, sme_auth_handle_anti_clogging reads ies for
+         * the token. They point to the same bytes; let wpa_supplicant
+         * sort out which portion it needs.
+         */
+        event.auth.ies          = mgmt->u.auth.variable;
+        event.auth.ies_len      = variable_len;
     }
 
 #if defined(BANANA_PI_PORT) && (HOSTAPD_VERSION >= 211)
@@ -711,7 +775,15 @@ static void nl80211_connect_event(wifi_interface_info_t *interface, struct nlatt
     sec = &interface->vap_info.u.sta_info.security;
 
     backhaul = &interface->u.sta.backhaul;
-
+#ifdef CONFIG_IEEE80211BE
+    if (interface->mlo_params.valid_links > 0 &&
+        interface->mlo_assoc_event_delivered &&
+        interface->wpa_s.wpa_state >= WPA_4WAY_HANDSHAKE) {
+        wifi_hal_info_print("%s: MLO in 4-way handshake, suppressing "
+                            "nl80211_connect_event duplicate\n", __func__);
+        return;
+    }
+#endif
     wifi_hal_dbg_print("%s:%d:bssid:%s frequency:%d ssid:%s\n", __func__, __LINE__,
         to_mac_str(backhaul->bssid, bssid_str), backhaul->freq, backhaul->ssid);
     radio = get_radio_by_rdk_index(interface->vap_info.radio_index);
@@ -777,6 +849,7 @@ static void nl80211_connect_event(wifi_interface_info_t *interface, struct nlatt
     }
 
     if (sec->mode != wifi_security_mode_none) {
+        wifi_hal_dbg_print("%s:%d: call eapol_sm_notify_portEnabled TRUE\n", __func__, __LINE__);
         eapol_sm_notify_eap_fail(interface->u.sta.wpa_sm->eapol, 0);
         eapol_sm_notify_eap_success(interface->u.sta.wpa_sm->eapol, 0);
         eapol_sm_notify_portEnabled(interface->u.sta.wpa_sm->eapol, TRUE);
@@ -795,6 +868,7 @@ static void nl80211_connect_event(wifi_interface_info_t *interface, struct nlatt
 
         //XXX: eapol_sm_rx_eapol
 #if HOSTAPD_VERSION >= 211 //2.11
+        wifi_hal_dbg_print("%s:%d: callwpa_sm_rx_eapol with FRAME_ENC_UNKNOWN\n", __func__, __LINE__);
         wpa_sm_rx_eapol(interface->u.sta.wpa_sm, (unsigned char *)&interface->u.sta.src_addr,
             (unsigned char *)hdr, buff_len, FRAME_ENCRYPTION_UNKNOWN);
 #else
@@ -809,10 +883,21 @@ static void nl80211_connect_event(wifi_interface_info_t *interface, struct nlatt
         interface->u.sta.state = WPA_COMPLETED;
         wifi_drv_set_supp_port(interface, 1);
     } else {
+        /* Don't regress state — if we're already in 4-way handshake or beyond,
+ * the connect event is a late duplicate from the kernel */
+    if (interface->wpa_s.wpa_state < WPA_4WAY_HANDSHAKE) {
+        wifi_hal_dbg_print("%s:%d: WPA_sm_set_state WPA_ASSOCIATED\n", __func__, __LINE__);
         wpa_sm_set_state(interface->u.sta.wpa_sm, WPA_ASSOCIATED);
         interface->u.sta.state = WPA_ASSOCIATED;
+    } else {
+        wifi_hal_dbg_print("%s:%d: duplicate event, retun without cancel_auth_timeout\n", __func__, __LINE__);
+        return;
     }
+}
+
 #if defined(CONFIG_WIFI_EMULATOR) || defined(BANANA_PI_PORT)
+        wifi_hal_dbg_print("%s:%d: Wpa_sup cancel auth timeout()n", __func__, __LINE__);
+
     wpa_supplicant_cancel_auth_timeout(&interface->wpa_s);
 #endif
 }
@@ -1675,6 +1760,7 @@ static void do_process_drv_event(wifi_interface_info_t *interface, int cmd, stru
     switch (cmd) {
 #if defined(_PLATFORM_RASPBERRYPI_) || defined(_PLATFORM_BANANAPI_R4_) 
     case NL80211_CMD_NEW_STATION:
+        wifi_hal_dbg_print("%s NL80211_CMD_NEW_STATION received, processinghh\n", __func__);
         nl80211_new_station_event(interface, tb);
         break;
 
@@ -1706,6 +1792,8 @@ static void do_process_drv_event(wifi_interface_info_t *interface, int cmd, stru
         nl80211_authenticate_event(interface, tb);
         break;
     case NL80211_CMD_ASSOCIATE:
+            wifi_hal_dbg_print("%s:%d: NL80211_CMD_ASSOCIATE  event for %s, SERVED Through stubbed clone\n",
+                       __func__, __LINE__, interface->name);
         nl80211_associate_event(interface, tb);
         break;
 #endif
@@ -1726,10 +1814,12 @@ static void do_process_drv_event(wifi_interface_info_t *interface, int cmd, stru
         break;
 
     case NL80211_CMD_VENDOR:
+        wifi_hal_dbg_print("%s hh\n", __func__);
         nl80211_vendor_event(interface, tb);
         break;
 
    default:
+           wifi_hal_dbg_print("%s default case\n", __func__);
         break;
     }
 }
@@ -1769,6 +1859,11 @@ int process_global_nl80211_event(struct nl_msg *msg, void *arg)
 
     interface = get_interface_by_if_index(ifidx, link_id);
     switch (gnlh->cmd) {
+    case NL80211_CMD_ASSOCIATE:  /* 38 */
+        wifi_hal_dbg_print("%s:%d: NL80211_CMD_ASSOCIATE event for %s\n",
+                       __func__, __LINE__, interface->name);
+        nl80211_associate_event(interface, tb);
+        break;
     case NL80211_CMD_RADAR_DETECT:
         // To handle CAC Finish and CAC Abort for DFS. These event involve only the primary
         // interface of the radio.

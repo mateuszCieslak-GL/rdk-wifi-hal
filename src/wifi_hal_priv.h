@@ -530,6 +530,7 @@ typedef struct wifi_interface_info_t {
     bool in_reconf;
 #ifdef CONFIG_IEEE80211BE
     struct sta_mlo_params mlo_params;
+    bool mlo_assoc_event_delivered;
 #endif /* CONFIG_IEEE80211BE */
 } wifi_interface_info_t;
 
