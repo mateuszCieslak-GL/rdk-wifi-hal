@@ -10685,11 +10685,21 @@ int nl80211_connect_sta(wifi_interface_info_t *interface)
                         interface->wpa_s.wpa : interface->u.sta.wpa_sm;
 
     u8 *sta_mld_mac = wifi_hal_get_mld_mac_address(interface);
+
+wifi_hal_info_print("%s: wifi_hal_get_mld_mac_address=%p, "
+                    "mlo_params.mld_addr=" MACSTR
+                    " interface->mac=" MACSTR "\n",
+                    __func__,
+                    wifi_hal_get_mld_mac_address(interface),
+                    MAC2STR(interface->mlo_params.mld_addr),
+                    MAC2STR(interface->mac));
+if (sta_mld_mac)  {
+    wifi_hal_info_print("%s: sta_mld_mac = " MACSTR "\n", __func__, MAC2STR(sta_mld_mac)); }
     /* Fallback: derive MLD MAC from iface->mlo_params if HAL function isn't ready yet  */
     /* Lack of MLD mac leads to M2 failure since AP is enforcing the 802.11be requirement
      * that M2 carry the STA MLD address in a MAC Address KDE. */
     if (!sta_mld_mac || is_zero_ether_addr(sta_mld_mac))
-        sta_mld_mac = interface->mlo_params.mld_addr;
+        sta_mld_mac = interface->mac;
 
     bool has_mld_mac = sta_mld_mac && !is_zero_ether_addr(sta_mld_mac);
 
