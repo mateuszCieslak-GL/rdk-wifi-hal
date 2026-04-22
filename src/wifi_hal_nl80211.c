@@ -10691,6 +10691,13 @@ int nl80211_connect_sta(wifi_interface_info_t *interface)
     struct wpa_sm *sme_sm = interface->wpa_s.wpa ?
                         interface->wpa_s.wpa : interface->u.sta.wpa_sm;
 
+/* Determine how many links to actually use. Cross section of AP possibilities, ours and preferences */
+//int num_active_links = interface->mlo_params.valid_links ?
+                       //__builtin_popcount(interface->mlo_params.valid_links) : 1;
+bool single_link_mode = interface->wpa_s.conf->mld_force_single_link; //(|| num_active_links == 1) 
+                         
+
+
     u8 *sta_mld_mac = wifi_hal_get_mld_mac_address(interface);
 
 wifi_hal_info_print("%s: wifi_hal_get_mld_mac_address=%p, "
@@ -10719,14 +10726,11 @@ if (sta_mld_mac)  {
                             __func__, MAC2STR(sta_mld_mac));
     }
         if (sme_sm) {
-                memcpy(sme_sm->mlo.ap_mld_addr,
-               interface->mlo_params.mld_addr, ETH_ALEN);
-        sme_sm->mlo.valid_links   = interface->mlo_params.valid_links;
-        sme_sm->mlo.assoc_link_id = assoc_id;
-
             // Target AP Identity
             memcpy(sme_sm->mlo.ap_mld_addr, interface->mlo_params.mld_addr, ETH_ALEN);
-            sme_sm->mlo.valid_links = interface->mlo_params.valid_links;
+            if (single_link_mode) sme_sm->mlo.valid_links = 0x1;
+            else {
+            sme_sm->mlo.valid_links = interface->mlo_params.valid_links; }
             sme_sm->mlo.assoc_link_id = assoc_id;
 
             /* PTK derivation SPA for MLO = STA MLD MAC , not the link MAC.
@@ -10741,10 +10745,6 @@ if (sta_mld_mac)  {
             for (int i = 0; i < MAX_NUM_MLD_LINKS; i++) {
                 if (!(interface->mlo_params.valid_links & BIT(i))) continue;
 
-            /* sm->mlo.links[i].bssid = AP link MAC for link i */
-                memcpy(sme_sm->mlo.links[i].bssid,
-                       interface->mlo_params.mld_links[i].bssid, ETH_ALEN);
-
             /* sme_sm->mlo.links[i].addr = STA link MAC for link i.
              * We only have the assoc link's STA MAC. Partner link
              * STA MACs are unknown in single-link mode — leave zeros. */
@@ -10757,16 +10757,22 @@ if (sta_mld_mac)  {
                  * Used as stub STA profiles to trigger SCB2_MLOCAP on BRCM AP firmware
                  * via the assoc-parse path (ml_ie_valid set from ML IE presence alone).
                  * Traffic flows only on link 0 — these links are declared but inactive. */
-                if (i == 1) {
-                    /* wifi1: AP iface on radio 1, link ID 1 */
-                    uint8_t link1_mac[] = {0x02, 0x02, 0x20, 0x0b, 0x2f, 0x18};
-                    memcpy(sme_sm->mlo.links[1].addr, link1_mac, ETH_ALEN);
+                if (!single_link_mode) {
+                    /* sm->mlo.links[i].bssid = AP link MAC for link i */
+                        memcpy(sme_sm->mlo.links[i].bssid,
+                            interface->mlo_params.mld_links[i].bssid, ETH_ALEN);
+
+                        if (i == 1) {
+                        /* wifi1: AP iface on radio 1, link ID 1, fake mac */ 
+                        uint8_t link1_mac[] = {0x02, 0x02, 0x20, 0x0b, 0x2f, 0x18};
+                        memcpy(sme_sm->mlo.links[1].addr, link1_mac, ETH_ALEN);
+                    }
+                    if (i == 2) {
+                        /* wifi2: AP iface on radio 2, link ID 2, fake mac */
+                        uint8_t link2_mac[] = {0x02, 0x02, 0x30, 0x0b, 0x2f, 0x19};
+                        memcpy(sme_sm->mlo.links[2].addr, link2_mac, ETH_ALEN);
+                    }   
                 }
-                if (i == 2) {
-                    /* wifi2: AP iface on radio 2, link ID 2 */
-                    uint8_t link2_mac[] = {0x02, 0x02, 0x30, 0x0b, 0x2f, 0x19};
-                    memcpy(sme_sm->mlo.links[2].addr, link2_mac, ETH_ALEN);
-                }   
                 wifi_hal_info_print("%s: sm link[%d]: STA=" MACSTR " AP=" MACSTR "\n",
                                 __func__, i,
                                 MAC2STR(sme_sm->mlo.links[i].addr),
@@ -10783,8 +10789,9 @@ if (sta_mld_mac)  {
 
         memcpy(eapol_sm->mlo.ap_mld_addr,
                interface->mlo_params.mld_addr, ETH_ALEN);
-        eapol_sm->mlo.valid_links = interface->mlo_params.valid_links;
-        eapol_sm->mlo.assoc_link_id = assoc_id;
+        if (single_link_mode) eapol_sm->mlo.valid_links = 0x1;
+         else {
+        eapol_sm->mlo.valid_links = interface->mlo_params.valid_links; }        eapol_sm->mlo.assoc_link_id = assoc_id;
 
         for (int i = 0; i < MAX_NUM_MLD_LINKS; i++) {
             if (!(interface->mlo_params.valid_links & BIT(i))) continue;
@@ -10796,6 +10803,7 @@ if (sta_mld_mac)  {
         }
     }
 
+    if (!single_link_mode) {
     /* ── partner BSS list injection (resolver needs one entry per link) ── */
     for (int i = 0; i < MAX_NUM_MLD_LINKS; i++) {
         if (i == assoc_id) continue;
@@ -10832,6 +10840,7 @@ if (sta_mld_mac)  {
                             MAC2STR(interface->mlo_params.mld_links[i].bssid),
                             interface->mlo_params.mld_links[i].freq);
     }
+    } //if !not_single_link-ode
         } else {
         wifi_hal_dbg_print("%s: No valid MLO parameters found. Proceeding with legacy Auth\n", __func__);
     }
@@ -17754,10 +17763,10 @@ int wifi_supplicant_drv_associate(void *priv, struct wpa_driver_associate_params
     /* Save and clear for this call only — assoc request needs full
      * ML element with STA profiles to trigger SCB2_MLOCAP on BRCM AP.
      * Auth already completed on link 0 only. */
-    int saved = interface->wpa_s.conf->mld_force_single_link;
-    if (interface->mlo_params.valid_links > 0) {
-        interface->wpa_s.conf->mld_force_single_link = 0;
-    wifi_hal_dbg_print("%s:%d: Flipped single_link to 0\n", __func__, __LINE__); }
+   // int saved = interface->wpa_s.conf->mld_force_single_link; //not needed for forced-signle-link
+    //if (interface->mlo_params.valid_links > 0) {
+      //  interface->wpa_s.conf->mld_force_single_link = 0;
+   // wifi_hal_dbg_print("%s:%d: Flipped single_link to 0\n", __func__, __LINE__); }
     
 #ifdef CONFIG_IEEE80211BE
     bool is_mlo = (!is_zero_ether_addr(interface->mlo_params.mld_addr) &&
@@ -17855,7 +17864,9 @@ int wifi_supplicant_drv_associate(void *priv, struct wpa_driver_associate_params
         if (!links) goto fail;
 
         for (int link_id = 0; link_id < MAX_NUM_MLD_LINKS; link_id++) {
-            if (!(interface->mlo_params.valid_links & BIT(link_id))) {
+            if (is_single_link_mlo && link_id != mlo->assoc_link_id) continue;
+
+            if (!is_single_link_mlo && !(interface->mlo_params.valid_links & BIT(link_id))) {
                 wifi_hal_info_print("%s:%d link=%d not valid, skipping\n", __func__,__LINE__, link_id);
                 continue;}
                 
@@ -17907,8 +17918,8 @@ int wifi_supplicant_drv_associate(void *priv, struct wpa_driver_associate_params
     nla_put(msg, NL80211_ATTR_IE, params->wpa_ie_len, params->wpa_ie);
     ret = nl80211_send_and_recv(msg, NULL, &g_wifi_hal, NULL, NULL);
     /* Restore immediately after NL80211_CMD_ASSOCIATE is sent */
-    interface->wpa_s.conf->mld_force_single_link = saved;
-        wifi_hal_dbg_print("%s:%d: Restoed force-single-link %d\n", __func__, __LINE__, interface->wpa_s.conf->mld_force_single_link);
+   // interface->wpa_s.conf->mld_force_single_link = saved;
+     //   wifi_hal_dbg_print("%s:%d: Restoed force-single-link %d\n", __func__, __LINE__, interface->wpa_s.conf->mld_force_single_link);
 
     if (ret == 0) {
         wifi_hal_dbg_print("%s:%d: Exit success\n", __func__, __LINE__);
