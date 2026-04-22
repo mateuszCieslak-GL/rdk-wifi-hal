@@ -3154,9 +3154,16 @@ wifi_hal_dbg_print("%s:%d mlo-transmitedframe \n", __func__, __LINE__);
                                         saved_valid_links,
                                         (unsigned)BIT(eapol_sm->mlo.assoc_link_id));
                 }
-
+                if (is_m3) {
+                    interface->defer_first_ptk = true;
+                    wifi_hal_info_print("recv_data_frame: arming PTK deferral for M3\n");
+                }
                 //wpa_sm_rx_eapol(eapol_sm, src_addr, buf, len);
-
+        wifi_hal_info_print("recv_data_frame: directly pre-eapol rx,sm=%p "
+                    "valid_links=0x%x own_addr=" MACSTR "\n",
+                    eapol_sm,
+                    eapol_sm->mlo.valid_links,
+                    MAC2STR(eapol_sm->own_addr));
                 wpa_sm_rx_eapol(eapol_sm,
                                 (unsigned char *)&sta,
                                 (unsigned char *)hdr,
@@ -10745,7 +10752,21 @@ if (sta_mld_mac)  {
                     memcpy(sme_sm->mlo.links[i].addr,
                             vap->u.sta_info.mac, ETH_ALEN);
                     }
-
+                
+                /* These are the AP vap MACs for radios 1 and 2 on this platform.
+                 * Used as stub STA profiles to trigger SCB2_MLOCAP on BRCM AP firmware
+                 * via the assoc-parse path (ml_ie_valid set from ML IE presence alone).
+                 * Traffic flows only on link 0 — these links are declared but inactive. */
+                if (i == 1) {
+                    /* wifi1: AP iface on radio 1, link ID 1 */
+                    uint8_t link1_mac[] = {0x02, 0x02, 0x20, 0x0b, 0x2f, 0x18};
+                    memcpy(sme_sm->mlo.links[1].addr, link1_mac, ETH_ALEN);
+                }
+                if (i == 2) {
+                    /* wifi2: AP iface on radio 2, link ID 2 */
+                    uint8_t link2_mac[] = {0x02, 0x02, 0x30, 0x0b, 0x2f, 0x19};
+                    memcpy(sme_sm->mlo.links[2].addr, link2_mac, ETH_ALEN);
+                }   
                 wifi_hal_info_print("%s: sm link[%d]: STA=" MACSTR " AP=" MACSTR "\n",
                                 __func__, i,
                                 MAC2STR(sme_sm->mlo.links[i].addr),
@@ -16509,6 +16530,7 @@ static void nl80211_control_port_frame (wifi_interface_info_t* interface, struct
 {
     u8 *src_addr;
     u16 ethertype;
+        wifi_hal_dbg_print("%s:%d:Enter\n", __func__, __LINE__);
 
     if (!tb[NL80211_ATTR_MAC] ||
             !tb[NL80211_ATTR_FRAME] ||
@@ -17676,7 +17698,27 @@ static void *deliver_assoc_event_thread(void *arg)
     interface->mlo_assoc_event_delivered = true;
 #if defined(BANANA_PI_PORT) && (HOSTAPD_VERSION >= 211)
     supplicant_event(&interface->wpa_s, EVENT_ASSOC, &event);
-
+/* Re-prime mlo.valid_links after EVENT_ASSOC — wpa_supplicant overwrites
+ * it from event data (0x1, single-link) during assoc processing,
+ * losing the full 0x7 set during priming. MAC KDE in M2 requires
+ * valid_links != 0 and correct link count. */
+if (interface->mlo_params.valid_links > 0) {
+    struct wpa_sm *eapol_sm = interface->u.sta.wpa_sm;
+    struct wpa_sm *sme_sm = interface->wpa_s.wpa ?
+                            interface->wpa_s.wpa : eapol_sm;
+if (eapol_sm) {
+    eapol_sm->mlo.valid_links   = interface->mlo_params.valid_links;
+    eapol_sm->mlo.assoc_link_id = interface->mlo_params.assoc_link_id;
+    memcpy(eapol_sm->mlo.ap_mld_addr,
+           interface->mlo_params.mld_addr, ETH_ALEN);
+    wifi_hal_info_print("deliver_assoc_event: restored "
+                        "valid_links=0x%x assoc_link_id=%d after EVENT_ASSOC\n",
+                        eapol_sm->mlo.valid_links,
+                        eapol_sm->mlo.assoc_link_id);
+}
+    if (sme_sm && sme_sm != eapol_sm)
+        sme_sm->mlo.valid_links = interface->mlo_params.valid_links;
+}
     /* Arm a watchdog for the 4-way handshake phase.
     * The auth timeout was cancelled at nl80211_connect_event and nothing
     * re-arms it. If M4 is never acknowledged by the AP (BRCM firmware
@@ -17709,7 +17751,14 @@ int wifi_supplicant_drv_associate(void *priv, struct wpa_driver_associate_params
     if ((msg = nl80211_drv_cmd_msg(g_wifi_hal.nl80211_id, interface, 0, NL80211_CMD_ASSOCIATE)) == NULL) {
         return -1;
     }
-
+    /* Save and clear for this call only — assoc request needs full
+     * ML element with STA profiles to trigger SCB2_MLOCAP on BRCM AP.
+     * Auth already completed on link 0 only. */
+    int saved = interface->wpa_s.conf->mld_force_single_link;
+    if (interface->mlo_params.valid_links > 0) {
+        interface->wpa_s.conf->mld_force_single_link = 0;
+    wifi_hal_dbg_print("%s:%d: Flipped single_link to 0\n", __func__, __LINE__); }
+    
 #ifdef CONFIG_IEEE80211BE
     bool is_mlo = (!is_zero_ether_addr(interface->mlo_params.mld_addr) &&
                    interface->mlo_params.valid_links > 0);
@@ -17720,7 +17769,7 @@ int wifi_supplicant_drv_associate(void *priv, struct wpa_driver_associate_params
     bool is_mlo = false;
     bool is_single_link_mlo = false;
 #endif
-    wifi_hal_dbg_print("%s:%d: Enter, mlo = %d\n", __func__, __LINE__, is_mlo);
+    wifi_hal_dbg_print("%s:%d: Enter, mlo = %d, singleLInk=%d\n", __func__, __LINE__, is_mlo, is_single_link_mlo);
 
     /* Both single-link and full MLO: NO top-level MAC/FREQ.
      * Legacy non-MLO (is_mlo=false) still needs them. */
@@ -17804,18 +17853,21 @@ int wifi_supplicant_drv_associate(void *priv, struct wpa_driver_associate_params
 
         struct nlattr *links = nla_nest_start(msg, NL80211_ATTR_MLO_LINKS);
         if (!links) goto fail;
-        wifi_hal_info_print("%s:%d single= %d, mlo = %d\n", __func__, __LINE__, is_single_link_mlo, is_mlo);
 
         for (int link_id = 0; link_id < MAX_NUM_MLD_LINKS; link_id++) {
-            if (!(params->mld_params.valid_links & BIT(link_id)))
-                continue;
-            if (mlo->mld_links[link_id].freq <= 0)
-                continue;
+            if (!(interface->mlo_params.valid_links & BIT(link_id))) {
+                wifi_hal_info_print("%s:%d link=%d not valid, skipping\n", __func__,__LINE__, link_id);
+                continue;}
+                
+            if (mlo->mld_links[link_id].freq <= 0) {
+                wifi_hal_info_print("%s:%d link=%d freq <=0, skipping\n", __func__,__LINE__, link_id);                
+                continue; }
 
             bool is_assoc_link = (link_id == mlo->assoc_link_id);
 
             /* In single-link mode, skip partner links entirely */
             if (is_single_link_mlo && !is_assoc_link) {
+                wifi_hal_info_print("%s:%d single mlo, skipping non-assoc link %d\n", __func__,__LINE__, link_id);
                 continue;
             }
 
@@ -17854,6 +17906,10 @@ int wifi_supplicant_drv_associate(void *priv, struct wpa_driver_associate_params
     }
     nla_put(msg, NL80211_ATTR_IE, params->wpa_ie_len, params->wpa_ie);
     ret = nl80211_send_and_recv(msg, NULL, &g_wifi_hal, NULL, NULL);
+    /* Restore immediately after NL80211_CMD_ASSOCIATE is sent */
+    interface->wpa_s.conf->mld_force_single_link = saved;
+        wifi_hal_dbg_print("%s:%d: Restoed force-single-link %d\n", __func__, __LINE__, interface->wpa_s.conf->mld_force_single_link);
+
     if (ret == 0) {
         wifi_hal_dbg_print("%s:%d: Exit success\n", __func__, __LINE__);
 #ifdef CONFIG_IEEE80211BE
@@ -18238,6 +18294,7 @@ int     wifi_drv_set_key(const char *ifname, void *priv, enum wpa_alg alg,
     if (params->addr && !is_broadcast_ether_addr(params->addr)) {
         nla_put(msg, NL80211_ATTR_MAC, ETH_ALEN, params->addr);
         if ((params->key_flag & KEY_FLAG_PAIRWISE_MASK) == KEY_FLAG_PAIRWISE_RX || (params->key_flag & KEY_FLAG_PAIRWISE_MASK) == KEY_FLAG_PAIRWISE_RX_TX_MODIFY) {
+            wifi_hal_dbg_print("%s:%d:inside PAIRWISE_RX_TX_MODIFY || PAIRWISE_RX branch\n",__func__,__LINE__);
           nla_put_u8(msg, NL80211_KEY_MODE, params->key_flag == KEY_FLAG_PAIRWISE_RX ? NL80211_KEY_NO_TX : NL80211_KEY_SET_TX);
         }
         else if ((params->key_flag & KEY_FLAG_GROUP_MASK) == KEY_FLAG_GROUP_RX) {
@@ -18252,6 +18309,12 @@ int     wifi_drv_set_key(const char *ifname, void *priv, enum wpa_alg alg,
           skip_set_key = 0;
         }
         else {
+                if (interface->defer_first_ptk) {
+                    interface->defer_first_ptk = false;
+                    wifi_hal_info_print("wifi_drv_set_key: suppressing first PTK install "
+                            "— M4 not yet sent, second call will install\n");
+                return 0;
+            }
           wifi_hal_dbg_print("%s:%d:pairwise key\n",__func__,__LINE__);
         }
     }
@@ -18265,6 +18328,7 @@ int     wifi_drv_set_key(const char *ifname, void *priv, enum wpa_alg alg,
         skip_set_key = 0;
     }
     nla_put_u8(msg, NL80211_ATTR_KEY_IDX, params->key_idx);
+      wifi_hal_dbg_print("%s:%d:Directly before netlink_send_and_recv SET_KEY\n",__func__,__LINE__);
 
     if ((ret = nl80211_send_and_recv(msg, NULL, (void *)-1, NULL, NULL))) {
         wifi_hal_dbg_print("%s:%d: Failed new key: %d(%s)\n", __func__, __LINE__, ret, strerror(-ret));
