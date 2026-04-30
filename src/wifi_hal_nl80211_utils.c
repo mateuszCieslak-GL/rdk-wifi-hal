@@ -5779,9 +5779,10 @@ wifi_interface_info_t *wifi_hal_get_mld_interface_by_link_id(wifi_interface_info
     if (link_id < 0) {
         return interface;
     }
-     //   wifi_hal_dbg_print("%s:%d: enter\n", __func__, __LINE__);
 
     if (!wifi_hal_is_mld_enabled(interface)) {
+        wifi_hal_dbg_print("%s:%d: mld NOT enabled for  %s\n", __func__, __LINE__, interface->name);
+
         return interface;
     }
 
@@ -5795,6 +5796,7 @@ wifi_interface_info_t *wifi_hal_get_mld_interface_by_link_id(wifi_interface_info
 
         hash_map_foreach(radio->interface_map, interface_iter) {
             if (!wifi_hal_is_mld_enabled(interface_iter)) {
+        wifi_hal_dbg_print("%s:%d: mld NOT enabled for  %s\n", __func__, __LINE__, interface_iter->name);        
                 continue;
             }
 
@@ -5803,6 +5805,8 @@ wifi_interface_info_t *wifi_hal_get_mld_interface_by_link_id(wifi_interface_info
             }
 
             if (wifi_hal_get_mld_link_id(interface_iter) == link_id) {
+                wifi_hal_dbg_print("%s:%d:  %s = linkid %d, returning\n", __func__, __LINE__, interface_iter->name, link_id);
+
                 return interface_iter;
             }
         }

@@ -532,6 +532,7 @@ typedef struct wifi_interface_info_t {
     struct sta_mlo_params mlo_params;
     bool mlo_assoc_event_delivered;
     bool defer_first_ptk;
+    unsigned long wdev_id;
 #endif /* CONFIG_IEEE80211BE */
 } wifi_interface_info_t;
 

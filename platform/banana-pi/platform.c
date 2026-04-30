@@ -363,7 +363,7 @@ int platform_pre_create_vap(wifi_radio_index_t index, wifi_vap_info_map_t *map)
 int platform_flags_init(int *flags)
 {
     wifi_hal_dbg_print("%s:%d \n",__func__,__LINE__);
-    *flags = PLATFORM_FLAGS_STA_INACTIVITY_TIMER /*| PLATFORM_FLAGS_CONTROL_PORT_FRAME*/;
+    *flags = PLATFORM_FLAGS_STA_INACTIVITY_TIMER | PLATFORM_FLAGS_CONTROL_PORT_FRAME;
     return 0;
 }
 

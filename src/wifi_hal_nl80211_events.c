@@ -41,6 +41,8 @@
 #ifdef CONFIG_WIFI_EMULATOR
 #include "config_supplicant.h"
 #endif
+extern void recv_data_frame_process(wifi_interface_info_t *interface,
+    const u8 *src_mac, const u8 *buf, size_t buflen);
 
 int no_seq_check(struct nl_msg *msg, void *arg)
 {
@@ -193,11 +195,11 @@ static void nl80211_new_station_event(wifi_interface_info_t *interface, struct n
 static void nl80211_del_station_event(wifi_interface_info_t *interface, struct nlattr **tb)
 {
 #ifndef CONFIG_WIFI_EMULATOR_EXT_AGENT
-    union wpa_event_data event;
+    //union wpa_event_data event;
     struct nlattr *attr;
     mac_address_t mac;
     mac_addr_str_t mac_str;
-    char br_buff[128] = {0};
+    //char br_buff[128] = {0};
 
     if ((attr = tb[NL80211_ATTR_MAC]) == NULL) {
         wifi_hal_error_print("%s:%d: mac attribute not present ... dropping\n", __func__, __LINE__);
@@ -221,6 +223,10 @@ static void nl80211_del_station_event(wifi_interface_info_t *interface, struct n
     wifi_hal_error_print("%s:%d: DEL station:%s, sending event: EVENT_DISASSOC\n", __func__, __LINE__,
         to_mac_str(mac, mac_str));
 
+    wifi_hal_error_print("%s: own_addr="MACSTR ",bssid="MACSTR " wpa state=%d ,early return \n", __func__, MAC2STR(interface->wpa_s.own_addr), MAC2STR(interface->wpa_s.bssid), interface->wpa_s.wpa_state);
+     return;
+     
+    /*
     snprintf(br_buff,sizeof(br_buff),"bridge fdb del %s dev %s master",to_mac_str(mac, mac_str),interface->name); //deleting fdb entries in bridge
     system(br_buff);
     os_memset(&event, 0, sizeof(event));
@@ -234,6 +240,7 @@ static void nl80211_del_station_event(wifi_interface_info_t *interface, struct n
     }
     //Remove the station from the bridge, if present
     wifi_hal_configure_sta_4addr_to_bridge(interface, 0);
+*/
 #endif
 }
 #endif //_PLATFORM_RASPBERRYPI_ || _PLATFORM_BANANAPI_R4_
@@ -275,6 +282,23 @@ static void nl80211_associate_event(wifi_interface_info_t *interface, struct nla
     if (interface->mlo_params.valid_links > 0 &&
         interface->mlo_assoc_event_delivered &&
         interface->wpa_s.wpa_state >= WPA_ASSOCIATED) {
+        // Real kernel assoc event arrives late but carries the actual
+        // assoc response IEs. Parse per-link RSNEs now so that:
+        // (a) M2 Link KDE generation has ap_rsne to work with
+        // (b) M3 validate_link_kde passes without needing the bypass patch
+        if (tb[NL80211_ATTR_RESP_IE] && interface->u.sta.wpa_sm) {
+            struct wpa_sm *sm = interface->u.sta.wpa_sm;
+            const u8 *resp_ie = nla_data(tb[NL80211_ATTR_RESP_IE]);
+            size_t resp_ie_len = nla_len(tb[NL80211_ATTR_RESP_IE]);
+
+        // wpa_sm_set_assoc_wpa_ie parses the resp_ie and populates
+        // sm->mlo.links[].ap_rsne for each link found in the ML IE
+        wpa_sm_set_assoc_wpa_ie(sm, resp_ie, resp_ie_len);
+
+        wifi_hal_dbg_print("%s: MLO parsed resp_ie (%zu bytes) into "
+                           "per-link ap_rsne\n", __func__, resp_ie_len);
+        }
+
         wifi_hal_info_print("%s: MLO assoc event already delivered "
                             "(state=%d), suppressing duplicate\n",
                             __func__, interface->wpa_s.wpa_state);
@@ -330,7 +354,7 @@ static void nl80211_associate_event(wifi_interface_info_t *interface, struct nla
         wifi_hal_info_print("%s:%d: wrong radio index:%d, beacon ie is not set\n",
             __func__, __LINE__, interface->vap_info.radio_index);
         event.assoc_info.beacon_ies = NULL;
-	event.assoc_info.beacon_ies_len = 0;
+        event.assoc_info.beacon_ies_len = 0;
     }
 
 #if defined(BANANA_PI_PORT) && (HOSTAPD_VERSION >= 211)
@@ -773,8 +797,9 @@ static void nl80211_connect_event(wifi_interface_info_t *interface, struct nlatt
     wifi_radio_operationParam_t *radio_param;
 
     sec = &interface->vap_info.u.sta_info.security;
-
+    wifi_hal_dbg_print("%s:%d: ehter\n", __func__, __LINE__);
     backhaul = &interface->u.sta.backhaul;
+
 #ifdef CONFIG_IEEE80211BE
     if (interface->mlo_params.valid_links > 0 &&
         interface->mlo_assoc_event_delivered &&
@@ -856,6 +881,7 @@ static void nl80211_connect_event(wifi_interface_info_t *interface, struct nlatt
     }
 
     if (interface->u.sta.pending_rx_eapol) {
+        wifi_hal_dbg_print("%s:%d rx eapol pending\n", __func__, __LINE__);
         void *hdr;
         int buff_len;
 #ifdef EAPOL_OVER_NL
@@ -883,16 +909,28 @@ static void nl80211_connect_event(wifi_interface_info_t *interface, struct nlatt
         interface->u.sta.state = WPA_COMPLETED;
         wifi_drv_set_supp_port(interface, 1);
     } else {
-        /* Don't regress state — if we're already in 4-way handshake or beyond,
+/* Don't regress state — if we're already in 4-way handshake or beyond,
  * the connect event is a late duplicate from the kernel */
+//re-check/remove.
     if (interface->wpa_s.wpa_state < WPA_4WAY_HANDSHAKE) {
         wifi_hal_dbg_print("%s:%d: WPA_sm_set_state WPA_ASSOCIATED\n", __func__, __LINE__);
         wpa_sm_set_state(interface->u.sta.wpa_sm, WPA_ASSOCIATED);
         interface->u.sta.state = WPA_ASSOCIATED;
     } else {
-        wifi_hal_dbg_print("%s:%d: duplicate event, retun without cancel_auth_timeout\n", __func__, __LINE__);
-        return;
+        if (interface->mlo_params.valid_links > 0 && interface->mlo_assoc_event_delivered) {
+        wifi_hal_dbg_print("%s: MLO — connect event handled via wpa_sup_state machine, "
+                       "skipping\n", __func__);
+        return; }
     }
+// clearer intent — this event is meaningless for MLO security path,
+// all completion work happens in wpa_sm_sta_set_state
+#ifdef CONFIG_IEEE80211BE
+if (interface->mlo_params.valid_links > 0 && interface->mlo_assoc_event_delivered) {
+    wifi_hal_dbg_print("%s: MLO — connect event handled via wpa_sup_state machine, "
+                       "skipping\n", __func__);
+    return;
+}
+#endif
 }
 
 #if defined(CONFIG_WIFI_EMULATOR) || defined(BANANA_PI_PORT)
@@ -917,6 +955,13 @@ static void nl80211_disconnect_event(wifi_interface_info_t *interface, struct nl
     interface->u.sta.state = WPA_DISCONNECTED;
     callbacks = get_hal_device_callbacks();
 
+    wifi_hal_dbg_print("%s:%d: ehter\n", __func__, __LINE__);
+
+wifi_hal_info_print("%s: MLO disconnect during handshake state=%d reason=%d by_ap=%d\n",
+    __func__, interface->wpa_s.wpa_state,
+    tb[NL80211_ATTR_REASON_CODE] ? nla_get_u16(tb[NL80211_ATTR_REASON_CODE]) : -1,
+    tb[NL80211_ATTR_DISCONNECTED_BY_AP] != NULL);
+    
     if (callbacks->sta_conn_status_callback) {
         memcpy(bss.bssid, interface->u.sta.backhaul.bssid, sizeof(bssid_t));
 
@@ -1755,6 +1800,64 @@ static void nl80211_vendor_event(wifi_interface_info_t *interface,
     }
 }
 
+static void nl80211_control_port_frame_event(wifi_interface_info_t *interface,
+    struct nlattr **tb)
+{
+    wifi_hal_dbg_print("%s:%d enter1\n", __func__, __LINE__);
+    struct nlattr *frame_attr = tb[NL80211_ATTR_FRAME];
+    struct nlattr *mac_attr   = tb[NL80211_ATTR_MAC];
+
+    if (!frame_attr) {
+        wifi_hal_error_print("%s:%d: missing FRAME\n", __func__, __LINE__);
+        return;
+    }
+
+    const u8 *frame = nla_data(frame_attr);
+    size_t frame_len = nla_len(frame_attr);
+    struct ieee8023_hdr *eth = (struct ieee8023_hdr *)frame;
+
+    wifi_hal_dbg_print("%s:%d enter2,src="MACSTR",dst="MACSTR"\n", __func__, __LINE__, MAC2STR(eth->src), MAC2STR(eth->dest));
+    /* Drop TX echoes — nl_send_auto causes kernel to reflect our own
+     * transmitted control port frames back as event 139 via multicast.
+     * Our frames always have BPI MLD MAC as src. */
+    if (memcmp(eth->src, interface->mac, ETH_ALEN) == 0) {
+        wifi_hal_dbg_print("%s: dropping TX echo src=" MACSTR "\n",
+            __func__, MAC2STR(eth->src));
+        return;
+    }
+    struct wpa_sm *sm = interface->u.sta.wpa_sm;
+if (sm) {
+    for (int i = 0; i < MAX_NUM_MLD_LINKS; i++) {
+        if (!(interface->mlo_params.valid_links & BIT(i))) continue;
+        if (!is_zero_ether_addr(sm->mlo.links[i].addr) &&
+            memcmp(eth->src, sm->mlo.links[i].addr, ETH_ALEN) == 0) {
+            wifi_hal_dbg_print("%s: dropping TX echo (link %d MAC) src=" MACSTR "\n",
+                __func__, i, MAC2STR(eth->src));
+            return;
+        }
+    }
+}
+    /* Kernel includes ethernet header in ATTR_FRAME for received
+     * control port frames — strip it before passing to process. */
+    if (frame_len > sizeof(struct ieee8023_hdr)) {
+        struct ieee8023_hdr *eth = (struct ieee8023_hdr *)frame;
+        wifi_hal_info_print("%s:%d: ctrl port frame len=%zu src=" MACSTR "\n",
+            __func__, __LINE__, frame_len, MAC2STR(eth->src));
+        recv_data_frame_process(interface,
+            eth->src,
+            frame + sizeof(struct ieee8023_hdr),
+            frame_len - sizeof(struct ieee8023_hdr));
+    } else {
+        /* No ethernet header — use MAC attr directly */
+    wifi_hal_dbg_print("%s:%d use-mac aatr directly, call recv_data_Frame_process\n", __func__, __LINE__);
+
+        recv_data_frame_process(interface,
+            mac_attr ? (const u8 *)nla_data(mac_attr) : NULL,
+            frame, frame_len);
+    }
+}
+
+
 static void do_process_drv_event(wifi_interface_info_t *interface, int cmd, struct nlattr **tb)
 {
     switch (cmd) {
@@ -1765,7 +1868,14 @@ static void do_process_drv_event(wifi_interface_info_t *interface, int cmd, stru
         break;
 
     case NL80211_CMD_DEL_STATION:
+        wifi_hal_dbg_print("%s NL80211_CMD_DEL_STATION received, processinghh\n", __func__);
         nl80211_del_station_event(interface, tb);
+        break;
+    case NL80211_CMD_CONTROL_PORT_FRAME:  /* 139 */
+    case 139:
+        wifi_hal_info_print("%s: NL80211_CMD_CONTROL_PORT_FRAME received on %s\n",
+            __func__, interface->name);
+        nl80211_control_port_frame_event(interface, tb);
         break;
 #endif // _PLATFORM_RASPBERRYPI_ || _PLATFORM_BANANAPI_R4_
     case NL80211_CMD_FRAME_TX_STATUS:
@@ -1819,7 +1929,7 @@ static void do_process_drv_event(wifi_interface_info_t *interface, int cmd, stru
         break;
 
    default:
-           wifi_hal_dbg_print("%s default case\n", __func__);
+           wifi_hal_dbg_print("%s default case/UNKNOWN netlink event that is-noop\n", __func__);
         break;
     }
 }
@@ -1852,12 +1962,17 @@ int process_global_nl80211_event(struct nl_msg *msg, void *arg)
         link_id = nla_get_u8(tb[NL80211_ATTR_MLO_LINK_ID]);
     }
 #endif // CONFIG_GENERIC_MLO
+    if (gnlh->cmd == 139) {
+        wifi_hal_info_print("process_global_nl80211_event: cmd=139 ifidx=%d wiphy=%d link_id=%d\n",
+            ifidx, wiphy_idx_rx, link_id);
+    }
 
     if (tb[NL80211_ATTR_RADAR_EVENT]) {
         event_type = nla_get_u32(tb[NL80211_ATTR_RADAR_EVENT]);
     }
 
     interface = get_interface_by_if_index(ifidx, link_id);
+    wifi_hal_dbg_print("%s: cmd=%d, ifname = %s\n", __func__, gnlh->cmd, interface->name);
     switch (gnlh->cmd) {
     case NL80211_CMD_ASSOCIATE:  /* 38 */
         wifi_hal_dbg_print("%s:%d: NL80211_CMD_ASSOCIATE event for %s\n",

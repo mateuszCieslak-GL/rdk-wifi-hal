@@ -2493,6 +2493,7 @@ static unsigned char* wpa_sm_sta_alloc_eapol(void *ctx, unsigned char type,
     hdr->version = EAPOL_VERSION;
     hdr->type = type;
     hdr->length = host_to_be16(data_len);
+    wifi_hal_dbg_print("%s:%d: Enter\n", __func__, __LINE__);
 
     if (data) {
         memcpy(hdr + 1, data, data_len);
@@ -2523,11 +2524,20 @@ static int wpa_sm_sta_ether_send(void *ctx, const u8 *dest, u16 proto, const u8 
         int encrypt;
         mac_addr_str_t mac_str;
 #ifdef CONFIG_GENERIC_MLO
-        int link_id = wifi_hal_get_mld_link_id(interface);
+    /* Use assoc_link_id directly — wifi_hal_get_mld_link_id returns -1
+     * because RDK interface map hasn't been updated with kernel link MACs yet.
+     * assoc_link_id is always correct for M2 TX since the 4-way handshake
+     * initiates on the association link. TODO: replace with proper lookup
+     * once interface map is updated in priming block. */
+    int link_id = (interface->mlo_params.valid_links > 0) ?
+                   (int)interface->mlo_params.assoc_link_id : -1;
 #else
         int link_id = -1;
 #endif // CONFIG_GENERIC_MLO
-
+        if (link_id == -1) {
+            wifi_hal_info_print("%s:%d: overriding linkid and seting to 2\n", __func__, __LINE__);
+            link_id = 2;
+        }
         encrypt = interface->u.sta.wpa_sm && wpa_sm_has_ptk_installed(interface->u.sta.wpa_sm);
         wifi_hal_info_print("%s:%d: Sending eapol via control port to sta:%s on interface:%s encrypt:%d\n", __func__, __LINE__,
             to_mac_str(dest, mac_str), interface->name, encrypt);
@@ -2539,17 +2549,41 @@ static int wpa_sm_sta_ether_send(void *ctx, const u8 *dest, u16 proto, const u8 
         return 0;
 #endif // HOSTAPD_VERSION >= 210     
     }
-        
     memset(&ll, 0, sizeof(ll));
-    //ll.sll_family = AF_PACKET;
+    eth_hdr = (struct ieee8023_hdr *)buff;
+
+#ifdef CONFIG_GENERIC_MLO
+    int link_id = wifi_hal_get_mld_link_id(interface);
+    struct wpa_sm *sm = interface->u.sta.wpa_sm;
+    link_id = 2;
+    /* Per-link MAC lives in wpa_sm — interface map not updated with
+     * kernel-computed link MACs yet. Use sm->mlo.links[] directly. */
+    const u8 *link_src_mac = interface->mac; /* fallback */
+    int link_ifindex = if_nametoindex(interface->name); /* fallback */
+    
+   // if (sm && link_id >= 0 && link_id < MAX_NUM_MLD_LINKS &&
+     //   !is_zero_ether_addr(sm->mlo.links[link_id].addr)) {
+        link_src_mac = sm->mlo.links[link_id].addr;
+        /* TODO: resolve ifindex for link_id once interface map is updated */
+        /* For now, MLD interface ifindex — kernel routes via link_id in sk */
+    //} 
+    
+    ll.sll_ifindex = link_ifindex;
+    memcpy(eth_hdr->src, link_src_mac, sizeof(mac_address_t));
+#else
     ll.sll_ifindex = if_nametoindex(interface->name);
+    memcpy(eth_hdr->src, interface->mac, sizeof(mac_address_t));
+#endif
+
+    wifi_hal_dbg_print("%s: interface name %s, idx=%d\n", __func__, interface->name, ll.sll_ifindex);
+    
+    //ll.sll_family = AF_PACKET;
     //ll.sll_protocol = htons(proto);
     ll.sll_halen = ETH_ALEN;
     memcpy(ll.sll_addr, dest, ETH_ALEN);
 
-    eth_hdr = (struct ieee8023_hdr *)buff;
     memcpy(eth_hdr->dest, dest, sizeof(mac_address_t));
-    memcpy(eth_hdr->src, interface->mac, sizeof(mac_address_t));
+    wifi_hal_dbg_print("%s: after setting hdr, src=" MACSTR " dst= " MACSTR "\n", __func__, MAC2STR(eth_hdr->src), MAC2STR(eth_hdr->dest));
     eth_hdr->ethertype = host_to_be16(ETH_P_EAPOL);
 
     memcpy(&buff[sizeof(struct ieee8023_hdr)], buf, len);
@@ -2977,6 +3011,8 @@ static void wpa_sm_eapol_notify_done(void *ctx)
     wifi_hal_dbg_print("%s:%d: Enter\n", __func__, __LINE__);
 }
 
+/* vap->u.sta_info.bssid being set to the 6GHz AP link MAC (5c:22:da:4c:31:02) rather than the MLD address or the assoc link MAC suggests that sta_info.bssid is being populated from a different source than u.sta.backhaul.bssid or current_bss. This could cause problems if wpa_sm_eapol_send ever legitimately fires — it would send to the wrong peer. W
+ */
 static int wpa_sm_eapol_send(void *ctx, int type, const u8 *buf,
                                             size_t len)
 {
@@ -2989,6 +3025,7 @@ static int wpa_sm_eapol_send(void *ctx, int type, const u8 *buf,
     int ret;
     int buff_size = 0;
     u16 data_len = htons(len);
+    wifi_hal_dbg_print("%s:%d: Enter\n", __func__, __LINE__);
 
     unsigned char eapol_version_buff[] = { 0x01, 0x00 };
 
@@ -3069,6 +3106,7 @@ void update_eapol_sm_params(wifi_interface_info_t *interface)
     wifi_vap_security_t *sec;
     vap = &interface->vap_info;
     sec = &vap->u.sta_info.security;
+    wifi_hal_dbg_print("%s:%d: Enter\n", __func__, __LINE__);
 
     if (interface->u.sta.wpa_sm->eapol == NULL) {
         ctx = os_zalloc(sizeof(struct eapol_ctx));
