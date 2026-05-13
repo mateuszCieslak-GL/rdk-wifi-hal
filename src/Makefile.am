@@ -21,7 +21,10 @@ AM_CFLAGS = -D_ANSC_LINUX
 AM_CFLAGS += -D_ANSC_USER
 AM_CFLAGS += -D_ANSC_LITTLE_ENDIAN_
 AM_CFLAGS += -Wall -Werror -Wextra -Wno-unused-parameter -Wno-pointer-sign -Wno-sign-compare -Wno-type-limits -Wno-format-truncation
+AM_CFLAGS += DEAPOL_OVER_NL
+#FOR ^^ bpi / mlo
 AM_CPPFLAGS = -Wall -Werror
+
 AUTOMAKE_OPTIONS = subdir-objects
 SUBDIRS = .
 if WITH_GTEST_SUPPORT

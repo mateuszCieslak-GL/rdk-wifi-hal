@@ -14552,8 +14552,12 @@ int nl80211_tx_control_port(wifi_interface_info_t *interface, const u8 *dest,
         wifi_hal_error_print("%s:%d: Failed to put MLO link ID\n", __func__, __LINE__);
         nlmsg_free(msg);
         return -1;
+    } else
+    {
+    wifi_hal_error_print("%s:%d:  set MLO_LINK_ID as %d\n", __func__, __LINE__, link_id);        
     }
 #endif // HOSTAPD_VERSION >= 211 && CONFIG_GENERIC_MLO
+#ifndef BANANA_PI_PORT
     /* Fire-and-forget: don't wait for ACK. EAPOL retransmit handles
      * reliability. Blocking here deadlocks against the event thread
      * when M3 arrives while M2 TX is in flight on the same socket. */
@@ -14562,6 +14566,28 @@ int nl80211_tx_control_port(wifi_interface_info_t *interface, const u8 *dest,
     
     nlmsg_free(msg);
     return (ret < 0) ? ret : 0;
+#else
+    /* OnBPI, for MLO Send EAPOL TX via the BSS socket (same socket that owns the
+     * connection via SOCKET_OWNER).  Use execute_send_and_recv() which
+     * blocks for the kernel ACK — this avoids stale-ACK corruption on
+     * g_wifi_hal.nl.  No deadlock risk: the BSS socket is separate from
+     * the multicast event socket, so M3 RX doesn't contend. */
+    int ret;
+    if (interface->bss_nl_connect_event && interface->bss_nl_cb) {
+        ret = execute_send_and_recv(interface->bss_nl_cb,
+            interface->bss_nl_connect_event, msg, NULL, interface, NULL, NULL);
+        wifi_hal_info_print("%s:%d: EAPOL TX via BSS socket, ret=%d\n",
+            __func__, __LINE__, ret);
+    } else {
+        wifi_hal_error_print("%s:%d: BSS socket not ready, fire-and-forget via global\n",
+            __func__, __LINE__);
+        ret = nl_send_auto((struct nl_sock *)g_wifi_hal.nl, msg);
+        wifi_hal_error_print("%s:%d: Called nl_send_auto, ret=%d\n", __func__, __LINE__, ret);
+        nlmsg_free(msg);
+        ret = (ret < 0) ? ret : 0;
+    }
+    return ret;
+#endif //banana_pi_port
 }
 
 
@@ -16657,6 +16683,19 @@ static void nl80211_control_port_frame (wifi_interface_info_t* interface, struct
                     nla_data(tb[NL80211_ATTR_FRAME]), nla_len(tb[NL80211_ATTR_FRAME]));
             } else {
                 if (interface->u.sta.wpa_sm && interface->u.sta.state >= WPA_ASSOCIATED) {
+#if defined(BANANA_PI_PORT) && (HOSTAPD_VERSION >= 211)
+                /* Route through recv_data_frame_process() so that STA-mode
+                 * workarounds (M3 valid_links narrowing, defer_first_ptk)
+                 * are applied.  NL80211_ATTR_FRAME does NOT include an
+                 * ethernet header — it is raw EAPOL payload. */
+                wifi_hal_info_print("%s:%d: ctrl port EAPOL RX len=%d src=" MACSTR "\n",
+                    __func__, __LINE__,
+                    nla_len(tb[NL80211_ATTR_FRAME]), MAC2STR(src_addr));
+                recv_data_frame_process(interface, src_addr,
+                    nla_data(tb[NL80211_ATTR_FRAME]),
+                    nla_len(tb[NL80211_ATTR_FRAME]));
+                break;
+#else // NOI banana_pi_port, or host ap <2.11
 #if HOSTAPD_VERSION >= 211 // 2.11
                     if (!interface->u.sta.wpa_sm->eapol ||
                         !eapol_sm_rx_eapol(interface->u.sta.wpa_sm->eapol, src_addr,
@@ -16673,7 +16712,8 @@ static void nl80211_control_port_frame (wifi_interface_info_t* interface, struct
                         wpa_sm_rx_eapol(interface->u.sta.wpa_sm, src_addr,
                             nla_data(tb[NL80211_ATTR_FRAME]), nla_len(tb[NL80211_ATTR_FRAME]));
                     }
-#endif
+#endif //hostapd version
+#endif //banana_pi_port
                 } else {
                     interface->u.sta.pending_rx_eapol = true;
                     memcpy(interface->u.sta.rx_eapol_buff, nla_data(tb[NL80211_ATTR_FRAME]),
@@ -17196,7 +17236,7 @@ int wifi_drv_set_country(void *priv, const char *alpha2_arg)
 
 int wifi_drv_set_supp_port(void *priv, int authorized)
 {
-    wifi_hal_dbg_print("%s:%d: Enter\n", __func__, __LINE__);
+    wifi_hal_dbg_print("%s:%d: Enterm authorized = %d\n", __func__, __LINE__, authorized);
 
     wifi_interface_info_t *interface;
     wifi_bss_info_t *backhaul;
@@ -17480,6 +17520,7 @@ error:
     return -1;
 }
 
+#ifndef EAPOL_OVER_NL
 static int register_data_frame_socket(wifi_interface_info_t *interface)
 {
     wifi_vap_info_t *vap;
@@ -17581,6 +17622,7 @@ static int register_data_frame_socket(wifi_interface_info_t *interface)
 
     return 0;
 }
+#endif
 
 int wifi_drv_set_operstate(void *priv, int state)
 {
@@ -17592,7 +17634,7 @@ int wifi_drv_set_operstate(void *priv, int state)
     if (state == 0 &&
         interface->mlo_params.valid_links > 0 &&
         interface->wpa_s.wpa_state == WPA_AUTHENTICATING) {
-        wifi_hal_info_print("%s: Suppressing set_operstate(0) during MLO SAE\n", __func__);
+        wifi_hal_info_print("%s: Suppressing set_operstate(0) during MLO SAE for iface %s \n", __func__, interface->name);
         return 0;
     }
 #endif
@@ -17966,6 +18008,20 @@ int wifi_supplicant_drv_associate(void *priv, struct wpa_driver_associate_params
                             
         nla_put_u32(msg, NL80211_ATTR_USE_MFP, NL80211_MFP_REQUIRED);
         nla_put_flag(msg, NL80211_ATTR_MLO_SUPPORT);
+/* Tell mac80211 that 802.1X port control is active. Without this,
+ * ieee80211_assoc_success() auto-authorizes the AP station entry
+ * (state 3→4, conn_state=1→2), causing the mt7996 firmware to
+ * enforce encryption before the 4-way handshake installs keys.
+ * M3 (unencrypted EAPOL-Key) is silently dropped by firmware.
+ * With this flag, authorization is deferred until
+ * wifi_drv_set_supp_port(authorized=1) after key installation. */
+        nla_put_flag(msg, NL80211_ATTR_CONTROL_PORT);
+        nla_put_u16(msg, NL80211_ATTR_CONTROL_PORT_ETHERTYPE, ETH_P_PAE);
+        nla_put_flag(msg, NL80211_ATTR_CONTROL_PORT_OVER_NL80211);
+        nla_put_flag(msg, NL80211_ATTR_CONTROL_PORT_NO_PREAUTH);
+        nla_put_flag(msg, NL80211_ATTR_SOCKET_OWNER);
+        wifi_hal_dbg_print("%s:%d: setting NL80211_ATTR_CONTROL_PORT + ETHERTYPE + OVER_NL80211 + SOCKET_OWNER\n ", __func__, __LINE__);
+ 
         nla_put_u8(msg, NL80211_ATTR_MLO_LINK_ID, mlo->assoc_link_id);
         nla_put(msg, NL80211_ATTR_MLD_ADDR, ETH_ALEN, mlo->mld_addr);
 
@@ -18038,7 +18094,24 @@ int wifi_supplicant_drv_associate(void *priv, struct wpa_driver_associate_params
         nla_put_flag(msg, NL80211_ATTR_USE_RRM);
     }
     nla_put(msg, NL80211_ATTR_IE, params->wpa_ie_len, params->wpa_ie);
+#ifdef BANANA_PI_PORT
+    /* Send ASSOCIATE via the BSS socket in MLO so that SOCKET_OWNER records
+     * its nlportid as conn_owner.  EAPOL RX (event 139) is unicast to
+     * conn_owner_nlportid — using a different socket would leave
+     * conn_owner pointing elsewhere and EAPOL RX would get -ENOENT. */
+    if (interface->bss_nl_connect_event && interface->bss_nl_cb) {
+        wifi_hal_info_print("%s:%d: sending ASSOCIATE via BSS socket (fd=%d)\n",
+            __func__, __LINE__, interface->bss_nl_connect_event_fd);
+        ret = execute_send_and_recv(interface->bss_nl_cb,
+            interface->bss_nl_connect_event, msg, NULL, interface, NULL, NULL);
+    } else {
+        wifi_hal_error_print("%s:%d: BSS socket not ready, falling back to per-thread socket\n",
+            __func__, __LINE__);
+        ret = nl80211_send_and_recv(msg, NULL, &g_wifi_hal, NULL, NULL);
+    }
+#else
     ret = nl80211_send_and_recv(msg, NULL, &g_wifi_hal, NULL, NULL);
+#endif
     /* Restore immediately after NL80211_CMD_ASSOCIATE is sent */
    // interface->wpa_s.conf->mld_force_single_link = saved;
      //   wifi_hal_dbg_print("%s:%d: Restoed force-single-link %d\n", __func__, __LINE__, interface->wpa_s.conf->mld_force_single_link);
