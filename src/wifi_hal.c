@@ -1515,6 +1515,24 @@ INT wifi_hal_connect(INT ap_index, wifi_bss_info_t *bss)
     wifi_hal_info_print("%s:%d: !!!!!! 0<-\n", __func__, __LINE__);
     wifi_interface_info_t *interface;
     wifi_vap_info_t *vap;
+
+  /*  if (is_wifi_hal_vap_mesh_sta(ap_index) && ap_index != 15) {
+        wifi_hal_info_print("%s:%d: FORCE_5G: redirecting mesh_sta connect "
+            "from vap_index=%d to vap_index=15 (mesh_sta_5g)\n",
+            __func__, __LINE__, ap_index);
+        ap_index = 15;
+    }*/
+
+
+    /* Clean up stale firmware/AP state from any previous failed connection.
+     * Without this, a failed MLO association (AP accepted, BPI firmware
+     * dropped AssocResp) leaves stale STA entries that block subsequent
+     * attempts. The disconnect is a no-op if not currently connected. */
+    if ((interface = get_interface_by_vap_index(ap_index)) != NULL) {
+        wifi_hal_info_print("%s:%d: pre-connect cleanup: disconnecting stale state\n", __func__, __LINE__);
+        nl80211_disconnect_sta(interface);
+    }
+
     bssid_t null_mac = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
     wifi_bss_info_t *backhaul, *tmp = NULL, *best = NULL;
     int best_rssi = -100;

@@ -2525,19 +2525,14 @@ static int wpa_sm_sta_ether_send(void *ctx, const u8 *dest, u16 proto, const u8 
         mac_addr_str_t mac_str;
 #ifdef CONFIG_GENERIC_MLO
     /* Use assoc_link_id directly — wifi_hal_get_mld_link_id returns -1
-     * because RDK interface map hasn't been updated with kernel link MACs yet.
-     * assoc_link_id is always correct for M2 TX since the 4-way handshake
-     * initiates on the association link. TODO: replace with proper lookup
-     * once interface map is updated in priming block. */
+     * because RDK interface map hasn't been updated with kernel link MACs yet. */
     int link_id = (interface->mlo_params.valid_links > 0) ?
                    (int)interface->mlo_params.assoc_link_id : -1;
 #else
         int link_id = -1;
 #endif // CONFIG_GENERIC_MLO
-        if (link_id == -1) {
-            wifi_hal_info_print("%s:%d: overriding linkid and seting to 2\n", __func__, __LINE__);
-            link_id = 2;
-        }
+        if (link_id == -1)
+            wifi_hal_info_print("%s:%d: MLO link_id=-1, kernel will use default\n",__func__, __LINE__);
         encrypt = interface->u.sta.wpa_sm && wpa_sm_has_ptk_installed(interface->u.sta.wpa_sm);
         wifi_hal_info_print("%s:%d: Sending eapol via control port to sta:%s on interface:%s encrypt:%d\n", __func__, __LINE__,
             to_mac_str(dest, mac_str), interface->name, encrypt);
@@ -2555,18 +2550,18 @@ static int wpa_sm_sta_ether_send(void *ctx, const u8 *dest, u16 proto, const u8 
 #ifdef CONFIG_GENERIC_MLO
     int link_id = wifi_hal_get_mld_link_id(interface);
     struct wpa_sm *sm = interface->u.sta.wpa_sm;
-    link_id = 2;
-    /* Per-link MAC lives in wpa_sm — interface map not updated with
-     * kernel-computed link MACs yet. Use sm->mlo.links[] directly. */
-    const u8 *link_src_mac = interface->mac; /* fallback */
-    int link_ifindex = if_nametoindex(interface->name); /* fallback */
-    
-   // if (sm && link_id >= 0 && link_id < MAX_NUM_MLD_LINKS &&
-     //   !is_zero_ether_addr(sm->mlo.links[link_id].addr)) {
+    const u8 *link_src_mac = interface->mac;
+    int link_ifindex = if_nametoindex(interface->name);
+
+    if (sm && link_id >= 0 && link_id < MAX_NUM_MLD_LINKS &&
+        !is_zero_ether_addr(sm->mlo.links[link_id].addr)) {
         link_src_mac = sm->mlo.links[link_id].addr;
-        /* TODO: resolve ifindex for link_id once interface map is updated */
-        /* For now, MLD interface ifindex — kernel routes via link_id in sk */
-    //} 
+    } else if (sm && interface->mlo_params.valid_links > 0) {
+        int aid = (int)interface->mlo_params.assoc_link_id;
+        if (aid >= 0 && aid < MAX_NUM_MLD_LINKS &&
+            !is_zero_ether_addr(sm->mlo.links[aid].addr))
+            link_src_mac = sm->mlo.links[aid].addr;
+    }
     
     ll.sll_ifindex = link_ifindex;
     memcpy(eth_hdr->src, link_src_mac, sizeof(mac_address_t));
@@ -3011,11 +3006,30 @@ static void wpa_sm_eapol_notify_done(void *ctx)
     wifi_hal_dbg_print("%s:%d: Enter\n", __func__, __LINE__);
 }
 
-/* vap->u.sta_info.bssid being set to the 6GHz AP link MAC (5c:22:da:4c:31:02) rather than the MLD address or the assoc link MAC suggests that sta_info.bssid is being populated from a different source than u.sta.backhaul.bssid or current_bss. This could cause problems if wpa_sm_eapol_send ever legitimately fires — it would send to the wrong peer. W
+/* vap->u.sta_info.bssid being set to the 6GHz AP link MAC (5c:22:da:4c:31:02) rather than the MLD address or the assoc link MAC suggests that sta_info.bssid is being populated from a different source than u.sta.backhaul.bssid or current_bss. This could cause problems if wpa_sm_eapol_send ever legitimately fires — it would send to the wrong peer. 
  */
 static int wpa_sm_eapol_send(void *ctx, int type, const u8 *buf,
                                             size_t len)
 {
+#ifdef EAPOL_OVER_NL //&& BANANA_PI_PORT
+    wifi_interface_info_t *interface = (wifi_interface_info_t *)ctx;
+    wifi_vap_info_t *vap = &interface->vap_info;
+    int link_id = (interface->mlo_params.valid_links > 0) ?
+                   (int)interface->mlo_params.assoc_link_id : -1;
+    int encrypt = interface->u.sta.wpa_sm &&
+                  wpa_sm_has_ptk_installed(interface->u.sta.wpa_sm);
+    int ret;
+
+    wifi_hal_info_print("%s:%d: EAPOL type=%d len=%zu via NL control port"
+        " (link_id=%d encrypt=%d)\n", __func__, __LINE__, type, len, link_id, encrypt);
+    ret = nl80211_tx_control_port(interface, vap->u.sta_info.bssid,
+                                  ETH_P_EAPOL, buf, len, !encrypt, link_id);
+    if (ret < 0) {
+        wifi_hal_error_print("%s:%d: EAPOL TX failed: %d\n", __func__, __LINE__, ret);
+        return -1;
+    }
+    return 0;
+#else /* EAPOL_OVER_NL */
     struct sockaddr_ll ll;
     wifi_interface_info_t *interface;
     wifi_vap_info_t *vap;
@@ -3060,6 +3074,7 @@ static int wpa_sm_eapol_send(void *ctx, int type, const u8 *buf,
     }
 
     return ret;
+#endif //EAPOL_OVER_NL && BANANA_PI_PORT
 }
 
 static void wpa_sm_eapol_aborted_cached(void *ctx)

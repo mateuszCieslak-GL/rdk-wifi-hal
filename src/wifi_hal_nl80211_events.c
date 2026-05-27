@@ -359,6 +359,8 @@ static void nl80211_associate_event(wifi_interface_info_t *interface, struct nla
 
 #if defined(BANANA_PI_PORT) && (HOSTAPD_VERSION >= 211)
     supplicant_event(&interface->wpa_s, EVENT_ASSOC, &event);
+    if (interface->mlo_params.valid_links > 0)
+        interface->mlo_assoc_event_delivered = true;
 #else
     wpa_supplicant_event_wpa(&interface->wpa_s, EVENT_ASSOC, &event);
 #endif // BANANA_PI_PORT
@@ -1978,7 +1980,11 @@ int process_global_nl80211_event(struct nl_msg *msg, void *arg)
         wifi_hal_dbg_print("%s:%d: NL80211_CMD_ASSOCIATE event for %s\n",
                        __func__, __LINE__, interface->name);
         nl80211_associate_event(interface, tb);
+#if defined(BANANA_PI_PORT) && defined(CONFIG_IEEE80211BE) 
+        return NL_SKIP;
+#else
         break;
+#endif
     case NL80211_CMD_RADAR_DETECT:
         // To handle CAC Finish and CAC Abort for DFS. These event involve only the primary
         // interface of the radio.

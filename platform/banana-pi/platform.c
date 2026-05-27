@@ -116,9 +116,9 @@ int platform_post_init(wifi_vap_info_map_t *vap_map)
             system...
         }
     } */   
-    // system("brctl addif brlan0 wifi0");
-    // system("brctl addif brlan0 wifi1"); 
-    // system("brctl addif brlan0 wifi2");
+     system("brctl addif brlan0 wifi0");
+     system("brctl addif brlan0 wifi1"); 
+     system("brctl addif brlan0 wifi2");
     return 0;
 }
 

@@ -206,7 +206,7 @@ int nl80211_send_and_recv(struct nl_msg *msg,
              void *valid_data,
              int (*valid_finish_handler)(struct nl_msg *, void *),
              void *valid_finish_data);
-
+        
 #if defined(CONFIG_HW_CAPABILITIES) || defined(VNTXER5_PORT) || defined(TARGET_GEMINI7_2)
 struct phy_info_arg {
     u16 *num_modes;
@@ -2050,7 +2050,7 @@ int process_frame_mgmt(wifi_interface_info_t *interface, struct ieee80211_mgmt *
     switch(stype) {
     case WLAN_FC_STYPE_AUTH:
         mgmt_type = WIFI_MGMT_FRAME_TYPE_AUTH;
-wifi_hal_dbg_print("%s:%d --- \n", __func__, __LINE__);
+//wifi_hal_dbg_print("%s:%d --- \n", __func__, __LINE__);
         if (len >= IEEE80211_HDRLEN + sizeof(mgmt->u.auth)) {
             wifi_hal_info_print("%s:%d: interface:%s received auth frame from:%s to:%s alg:%d "
                                 "seq:%d sc:%d len:%d rssi:%d\n",
@@ -2656,7 +2656,7 @@ int process_mgmt_frame(struct nl_msg *msg, void *arg)
     //wifi_hal_dbg_print("%s:%d -- \n", __func__, __LINE__);
 
     if (process_frame_mgmt(interface, mgmt, reason, sig_dbm, phy_rate, len, recv_freq) < 0) {
-    wifi_hal_dbg_print("%s:%d -- \n", __func__, __LINE__);
+   // wifi_hal_dbg_print("%s:%d -- \n", __func__, __LINE__);
 
         return NL_SKIP;
     }
@@ -3790,6 +3790,8 @@ static int nl80211_set_rx_control_port_owner(struct nl_msg *msg,
     struct nl_cb *cb = interface->bss_nl_cb;
     int ret = -1;
 
+    wifi_hal_error_print("%s: Enter \n", __func__);
+
     if (!msg) {
         return -ENOMEM;
     }
@@ -3828,6 +3830,26 @@ int nl80211_send_and_recv(struct nl_msg *msg,
              void *valid_finish_data)
 {
     wifi_hal_info_print("%s:%d: !!!!!! 0<-\n", __func__, __LINE__);
+
+
+
+// 1. Get the standard Netlink header
+    struct nlmsghdr *nlh = nlmsg_hdr(msg);
+    
+    if (nlh) {
+        uint16_t family_id = nlh->nlmsg_type; 
+        
+        // 2. Get the Generic Netlink header (where nl80211 commands live)
+        struct genlmsghdr *gnlh = genlmsg_hdr(nlh);
+        if (gnlh) {
+            uint8_t cmd_id = gnlh->cmd; 
+            
+            wifi_hal_info_print("%s:[DIAG] Sending Netlink Msg | Family ID: %u | Command ID: %u\n", __func__, 
+                   family_id, cmd_id);
+        }
+    }
+
+
     char thread_id[24];
     wifi_netlink_thread_info_t *nl_info = NULL;
 
@@ -8402,6 +8424,7 @@ int nl80211_register_mgmt_frames(wifi_interface_info_t *interface)
     }
 #endif // CONFIG_GENERIC_MLO
 
+    wifi_hal_dbg_print("%s:%d: registering for %s \n", __func__, __LINE__, wifi_hal_get_interface_name(interface));
     if (interface->mgmt_frames_registered == 1) {
         wifi_hal_dbg_print("%s:%d: Mgmt frames already registered for %s\n", __func__, __LINE__,
             wifi_hal_get_interface_name(interface));
@@ -10286,7 +10309,8 @@ int nl80211_connect_sta(wifi_interface_info_t *interface)
     // and so wpa_supplicant gets the full 402-byte IEs!
     // ====================================================================
 #ifdef CONFIG_IEEE80211BE
-    if (bss_ie->buff && needs_mlo_probe(bss_ie->buff, bss_ie->buff_len)) {
+//    if (bss_ie->buff && needs_mlo_probe(bss_ie->buff, bss_ie->buff_len)) {
+    if (1) {
         wifi_hal_info_print("%s: MLD detected. Performing synchronous targeted probe...\n", __func__);
 
         msg = nl80211_drv_cmd_msg(g_wifi_hal.nl80211_id, interface, 0, NL80211_CMD_TRIGGER_SCAN);
@@ -17383,6 +17407,10 @@ int nl80211_register_bss_frames(wifi_interface_info_t *interface)
     wifi_hal_info_print("%s:%d: register bss frames handler for %s\n", __func__, __LINE__,
         wifi_hal_get_interface_name(interface));
 
+    wifi_hal_info_print("%s:%d: DIAG nl80211_register_bss_frames: ifname=%s attempting"
+        " NL80211 EAPOL socket registration\n",
+        __func__, __LINE__, wifi_hal_get_interface_name(interface));
+ 
     interface->bss_nl_cb = nl_cb_alloc(NL_CB_DEFAULT);
     if (interface->bss_nl_cb == NULL) {
         wifi_hal_error_print("%s:%d: failed to alloc nl_cb for %s interface\n", __func__, __LINE__,
@@ -17422,7 +17450,11 @@ int nl80211_register_bss_frames(wifi_interface_info_t *interface)
             interface->bss_nl_connect_event_fd);
 
     interface->bss_frames_registered = 1;
-
+    wifi_hal_info_print("%s:%d: DIAG nl80211_register_bss_frames: ifname=%s SUCCESS"
+        " fd=%d bss_frames_registered=1\n",
+        __func__, __LINE__, wifi_hal_get_interface_name(interface),
+        interface->bss_nl_connect_event_fd);
+ 
     return 0;
 
 error:
@@ -17434,6 +17466,8 @@ error:
         nl_destroy_handles(&interface->bss_nl_connect_event);
         interface->bss_nl_connect_event = NULL;
     }
+        wifi_hal_info_print("%s:%d: DIAG nl80211_register_bss_frames: ifname=%s FAILED\n",
+        __func__, __LINE__, wifi_hal_get_interface_name(interface));
     return -1;
 }
 #endif
@@ -17529,12 +17563,17 @@ static int register_data_frame_socket(wifi_interface_info_t *interface)
     int sock_fd;
 
     wifi_hal_dbg_print("%s:%d Enter \n", __func__, __LINE__);
+    wifi_hal_info_print("%s:%d: DIAG register_data_frame_socket: ifname=%s"
+        " vap_mode=%d entering\n",
+        __func__, __LINE__, wifi_hal_get_interface_name(interface),
+        interface->vap_info.vap_mode);
 #if defined(CONFIG_GENERIC_MLO)
     interface = wifi_hal_get_first_mld_interface(interface);
     if (interface == NULL) {
         wifi_hal_error_print("%s:%d: Failed to get first MLD interface\n", __func__, __LINE__);
         return -1;
     }
+    wifi_hal_error_print("%s:%d: will register for %s, mode=%d\n", __func__,__lINE__, wifi_hal_get_interface_name(interface), interface->vap_info.vap_mode);
 #endif // CONFIG_GENERIC_MLO
 
     if (interface->data_frames_registered == 1) {
@@ -17583,6 +17622,7 @@ static int register_data_frame_socket(wifi_interface_info_t *interface)
         vap->bridge_name :
         interface->name;
 #endif
+    wifi_hal_error_print("%s:%d: ifname = %s\n", __func__, __LINE__, ifname);
     memset(&sockaddr, 0, sizeof(struct sockaddr_ll));
     sockaddr.sll_family = AF_PACKET;
     sockaddr.sll_ifindex = if_nametoindex(ifname);
@@ -17619,7 +17659,11 @@ static int register_data_frame_socket(wifi_interface_info_t *interface)
     }
 
     interface->data_frames_registered = 1;
-
+    wifi_hal_info_print("%s:%d: DIAG register_data_frame_socket: ifname=%s"
+        " bound ifname=%s sock_fd=%d vap_mode=%d data_frames_registered=1\n",
+        __func__, __LINE__, wifi_hal_get_interface_name(interface),
+        ifname, sock_fd, vap->vap_mode);
+ 
     return 0;
 }
 #endif
@@ -17640,6 +17684,19 @@ int wifi_drv_set_operstate(void *priv, int state)
 #endif
     wifi_hal_info_print("%s:%d: Enter, interface:%s bridge:%s driver operation state:%d\n",
             __func__, __LINE__, interface->name, vap->bridge_name, state);
+#ifdef EAPOL_OVER_NL
+    wifi_hal_info_print("%s:%d: DIAG wifi_drv_set_operstate: ifname=%s state=%d"
+        " bss_frames_registered=%d bss_nl_connect_event_fd=%d\n",
+        __func__, __LINE__, interface->name, state,
+        interface->bss_frames_registered,
+        interface->bss_nl_connect_event_fd);
+#else
+    wifi_hal_info_print("%s:%d: DIAG wifi_drv_set_operstate: ifname=%s state=%d"
+        " data_frames_registered=%d sta_sock_fd=%d (EAPOL_OVER_NL=off)\n",
+        __func__, __LINE__, interface->name, state,
+        interface->data_frames_registered,
+        (vap->vap_mode == wifi_vap_mode_sta) ? interface->u.sta.sta_sock_fd : -1);
+#endif
 
 #ifndef CONFIG_WIFI_EMULATOR
     if (interface->vap_configured == true) {
@@ -17741,7 +17798,26 @@ int wifi_drv_authenticate(void *priv, struct wpa_driver_auth_params *params)
 
 int wifi_drv_deauthenticate(void *priv, const u8 *addr, u16 reason_code)
 {
-    wifi_hal_dbg_print("%s:%d: Enter\n", __func__, __LINE__);
+    wifi_interface_info_t *interface = (wifi_interface_info_t *)priv;
+    struct nl_msg *msg;
+    int ret;
+
+    wifi_hal_info_print("%s:%d: Enter, addr=" MACSTR " reason=%u\n",
+                        __func__, __LINE__, MAC2STR(addr), reason_code);
+
+    msg = nl80211_drv_cmd_msg(g_wifi_hal.nl80211_id, interface, 0,
+                              NL80211_CMD_DEAUTHENTICATE);
+    if (!msg)
+        return -1;
+
+    nla_put(msg, NL80211_ATTR_MAC, ETH_ALEN, addr);
+    nla_put_u16(msg, NL80211_ATTR_REASON_CODE, reason_code);
+
+    ret = nl80211_send_and_recv(msg, NULL, &g_wifi_hal, NULL, NULL);
+    if (ret) {
+        wifi_hal_info_print("%s:%d: deauth ret=%d (may be expected if not associated)\n",
+                            __func__, __LINE__, ret);
+    }
     return 0;
 }
 
@@ -17850,13 +17926,17 @@ static void *deliver_assoc_event_thread(void *arg)
     interface->u.sta.state = WPA_ASSOCIATED;
     wifi_hal_info_print("deliver_assoc_event: set u.sta.state = WPA_ASSOCIATED\n");
 
-    wifi_hal_info_print("deliver_assoc_event: firing synthetic EVENT_ASSOC "
-                        "for " MACSTR "\n",
-                        MAC2STR(interface->wpa_s.bssid));
-
-    interface->mlo_assoc_event_delivered = true;
+    if (!interface->mlo_assoc_event_delivered) {
+        wifi_hal_info_print("deliver_assoc_event: firing synthetic EVENT_ASSOC "
+                            "for " MACSTR "\n", MAC2STR(interface->wpa_s.bssid));
+        interface->mlo_assoc_event_delivered = true;
 #if defined(BANANA_PI_PORT) && (HOSTAPD_VERSION >= 211)
-    supplicant_event(&interface->wpa_s, EVENT_ASSOC, &event);
+        supplicant_event(&interface->wpa_s, EVENT_ASSOC, &event);
+    } else {
+        wifi_hal_info_print("deliver_assoc_event: kernel already delivered "
+                            "EVENT_ASSOC, skipping synthetic for " MACSTR "\n",
+                            MAC2STR(interface->wpa_s.bssid));
+    }
 /* Re-prime mlo.valid_links after EVENT_ASSOC — wpa_supplicant overwrites
  * it from event data (0x1, single-link) during assoc processing,
  * losing the full 0x7 set during priming. MAC KDE in M2 requires
@@ -17949,6 +18029,8 @@ int wifi_supplicant_drv_associate(void *priv, struct wpa_driver_associate_params
             ver |= NL80211_WPA_VERSION_1;
         if (params->wpa_proto & WPA_PROTO_RSN)
             ver |= NL80211_WPA_VERSION_2;
+        if (params->key_mgmt_suite & WPA_KEY_MGMT_SAE)
+            ver |= NL80211_WPA_VERSION_3;
 
         nla_put_u32(msg, NL80211_ATTR_WPA_VERSIONS, ver);
 
@@ -17998,7 +18080,6 @@ int wifi_supplicant_drv_associate(void *priv, struct wpa_driver_associate_params
 
     if (is_mlo) {
         sta_mlo_params_t *mlo = &interface->mlo_params;
-        wifi_interface_info_t *if_partner = NULL;
 
         wifi_hal_info_print("%s: MLD Assoc: link_id=%u, MLD addr=" MACSTR
                             ", Valid Links Mask: 0x%02x, single_link=%d\n",
@@ -18055,19 +18136,6 @@ int wifi_supplicant_drv_associate(void *priv, struct wpa_driver_associate_params
                     mlo->mld_links[link_id].bssid);
             nla_put_u32(msg, NL80211_ATTR_WIPHY_FREQ,
                         mlo->mld_links[link_id].freq);
-            if (link_id  == 0) {
-                if_partner = get_interface_by_vap_index(15);
-                nla_put_u64(msg, NL80211_ATTR_WDEV, 
-                if_partner->wdev_id);
-            }
-            if (link_id  == 1) {
-                if_partner = get_interface_by_vap_index(23);
-                nla_put_u64(msg, NL80211_ATTR_WDEV, 
-                if_partner->wdev_id);
-
-            } else  {
-            nla_put_u64(msg, NL80211_ATTR_WDEV, 
-                  interface->wdev_id); }
 
             /* IE: required on partner links, FORBIDDEN on assoc link.
              * Kernel extack: "cannot have per-link elems on assoc link" */
@@ -18086,14 +18154,18 @@ int wifi_supplicant_drv_associate(void *priv, struct wpa_driver_associate_params
         nla_nest_end(msg, links);
     }
 
-    /* Top-level IE covers the assoc link RSNE for both single and full MLO */
-    nla_put(msg, NL80211_ATTR_IE, params->wpa_ie_len, params->wpa_ie);
+    if (is_mlo) {
+        nla_put(msg, NL80211_ATTR_IE, params->wpa_ie_len, params->wpa_ie);
+    } 
 #endif
 
     if (params->rrm_used) {
         nla_put_flag(msg, NL80211_ATTR_USE_RRM);
     }
-    nla_put(msg, NL80211_ATTR_IE, params->wpa_ie_len, params->wpa_ie);
+#ifdef CONFIG_IEEE80211BE
+    if (!is_mlo)
+#endif
+        nla_put(msg, NL80211_ATTR_IE, params->wpa_ie_len, params->wpa_ie);
 #ifdef BANANA_PI_PORT
     /* Send ASSOCIATE via the BSS socket in MLO so that SOCKET_OWNER records
      * its nlportid as conn_owner.  EAPOL RX (event 139) is unicast to

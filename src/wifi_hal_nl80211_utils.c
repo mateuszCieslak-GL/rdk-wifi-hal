@@ -2130,6 +2130,12 @@ int set_interface_properties(unsigned int phy_index, wifi_interface_info_t *inte
             strcpy(vap->vap_name, map->vap_name);
             vap->vap_mode = is_wifi_hal_vap_mesh_sta(vap->vap_index) ? wifi_vap_mode_sta :
                                                                        wifi_vap_mode_ap;
+            if (vap->vap_mode == wifi_vap_mode_sta) {
+                wifi_hal_info_print("%s:%d: DIAG mesh_sta matched: ifname=%s vap_index=%d"
+                    " vap_name=%s phy_index=%u\n",
+                    __func__, __LINE__, interface->name, vap->vap_index, vap->vap_name,
+                    phy_index);
+            }
             return 0;
         }
     }
@@ -5796,7 +5802,7 @@ wifi_interface_info_t *wifi_hal_get_mld_interface_by_link_id(wifi_interface_info
 
         hash_map_foreach(radio->interface_map, interface_iter) {
             if (!wifi_hal_is_mld_enabled(interface_iter)) {
-        wifi_hal_dbg_print("%s:%d: mld NOT enabled for  %s\n", __func__, __LINE__, interface_iter->name);        
+     //   wifi_hal_dbg_print("%s:%d: mld NOT enabled for  %s\n", __func__, __LINE__, interface_iter->name);        
                 continue;
             }
 
