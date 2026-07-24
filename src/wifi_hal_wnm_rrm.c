@@ -557,7 +557,7 @@ static int handle_rx_wnm_notification_req(wifi_interface_info_t *interface,
     return WIFI_HAL_UNSUPPORTED;
 }
 
-#if !defined(PLATFORM_LINUX) || defined(_PLATFORM_BANANAPI_R4_)
+#if !defined(PLATFORM_LINUX) || defined(_PLATFORM_BANANAPI_R4_) || defined(_PLATFORM_RASPBERRYPI_)
 int handle_wnm_action_frame(wifi_interface_info_t *interface, const mac_address_t sta, struct ieee80211_mgmt *mgmt, size_t len)
 {
     u8 action;
@@ -614,6 +614,68 @@ int wifi_rrm_send_beacon_req(wifi_interface_info_t *interface, const u8 *addr,
             break;
         }
     }
+
+#if HOSTAPD_VERSION >= 211 && defined(CONFIG_GENERIC_MLO)
+    /* MLD fallback: addr may be the STA's MLD MAC address.  hostapd stores
+     * each STA by its per-link MAC, so ap_get_sta() will fail for MLD clients
+     * when the caller passes the MLD MAC.  Walk the sta_list on every BSS and
+     * match against mld_info.common_info.mld_addr instead. */
+    if (!sta) {
+        for (i = 0; i < hapd->iface->num_bss && !sta; i++) {
+            struct sta_info *s;
+            for (s = hapd->iface->bss[i]->sta_list; s != NULL; s = s->next) {
+                if (os_memcmp(s->mld_info.common_info.mld_addr, addr, ETH_ALEN) == 0) {
+                    sta = s;
+                    hapd = hapd->iface->bss[i];
+                    break;
+                }
+            }
+        }
+        if (sta != NULL) {
+            wifi_hal_dbg_print("%s:%d: Request beacon: MLD STA " MACSTR " found by MLD MAC on BSS " MACSTR "\n",
+                __func__, __LINE__, MAC2STR(addr), MAC2STR(hapd->own_addr));
+        }
+    }
+
+    /* Final fallback for MLO: Search all AP interface hapds globally so
+     * the STA is always found regardless of which interface was requested. */
+    if (!sta) {
+        for (unsigned int _r = 0; _r < g_wifi_hal.num_radios && !sta; _r++) {
+            wifi_radio_info_t *_radio = get_radio_by_rdk_index(_r);
+            if (_radio == NULL) continue;
+            wifi_interface_info_t *_iface;
+            hash_map_foreach(_radio->interface_map, _iface) {
+                if (_iface == interface || _iface->vap_info.vap_mode != wifi_vap_mode_ap) {
+                    continue;
+                }
+                if (_iface->u.ap.hapd.iface == NULL) {
+                     continue;
+                }
+                for (int _b = 0; _b < _iface->u.ap.hapd.iface->num_bss && !sta; _b++) {
+                    struct hostapd_data *_hapd = _iface->u.ap.hapd.iface->bss[_b];
+                    sta = ap_get_sta(_hapd, addr);
+#if HOSTAPD_VERSION >= 211 && defined(CONFIG_IEEE80211BE)
+                    if (!sta) {
+                        struct sta_info *s;
+                        for (s = _hapd->sta_list; s != NULL; s = s->next) {
+                            if (os_memcmp(s->mld_info.common_info.mld_addr, addr, ETH_ALEN) == 0) {
+                                sta = s;
+                                break;
+                            }
+                        }
+                    }
+#endif // HOSTAPD_VERSION >= 211 && CONFIG_IEEE80211BE
+                    if (sta) {
+                        hapd = _hapd;
+                        wifi_hal_dbg_print("%s:%d: Found STA " MACSTR " via global hapd search (BSS " MACSTR ")\n",
+                            __func__, __LINE__, MAC2STR(addr), MAC2STR(hapd->own_addr));
+                    }
+                }
+                if (sta) break;
+            }
+        }
+    }
+#endif // HOSTAPD_VERSION >= 211 && CONFIG_GENERIC_MLO
 
     if (!sta || !(sta->flags & WLAN_STA_AUTHORIZED)) {
         wifi_hal_error_print("%s:%d: Request beacon: Destination address is not connected\n", __func__, __LINE__);
@@ -782,7 +844,7 @@ static void wifi_set_disassoc_timer(struct hostapd_data *hapd, struct sta_info *
                 ap_handle_timer, hapd, sta);
 }
 
-#if !defined(PLATFORM_LINUX) || defined(_PLATFORM_BANANAPI_R4_)
+#if !defined(PLATFORM_LINUX) || defined(_PLATFORM_BANANAPI_R4_) || defined(_PLATFORM_RASPBERRYPI_)
 /* Implementation is based on wnm_send_bss_tm_req() from wnm_ap.c */
 int wifi_wnm_send_bss_tm_req(wifi_interface_info_t *interface, struct sta_info *sta,
             u8 dialog_token, u8 req_mode, int disassoc_timer, u8 valid_int,
@@ -1049,7 +1111,7 @@ int wifi_rrm_send_beacon_resp(unsigned int ap_index, wifi_neighbor_ap2_t *bss,
     unsigned int num_ssid, unsigned int token, unsigned int num_report)
 {
     struct wpabuf *wpa_buf = NULL;
-    struct rrm_measurement_beacon_report rep;
+    struct rrm_measurement_beacon_report rep = { 0 };
     uint8_t idx = 0;
     size_t ssid_len = 0;
     unsigned int itr = 0;
@@ -1060,7 +1122,10 @@ int wifi_rrm_send_beacon_resp(unsigned int ap_index, wifi_neighbor_ap2_t *bss,
     wifi_radio_operationParam_t *radio_param = NULL;
     radio_param = &radio->oper_param;
     int op_class = 0;
-    op_class = get_op_class_from_radio_params(radio_param);
+    if ((op_class = get_op_class_from_radio_params(radio_param)) == -1) {
+        wifi_hal_error_print("%s:%d: Could not find op_class for radio\n", __func__, __LINE__);
+        return RETURN_ERR;
+    }
 
     for (itr = 0; itr < num_report; itr++) {
         ssid_len = strlen(bss->ap_SSID);
@@ -1114,7 +1179,11 @@ int wifi_rrm_send_beacon_resp(unsigned int ap_index, wifi_neighbor_ap2_t *bss,
         pos2 += REPORTED_FRAME_BODY_SUBELEM_LEN;
         size_t data_len = ((pos - pos1) + sizeof(struct rrm_measurement_beacon_report) +
             REPORTED_FRAME_BODY_SUBELEM_LEN);
-        wpabuf_resize(&wpa_buf, 5 + data_len);
+        if (wpabuf_resize(&wpa_buf, 5 + data_len) < 0) {
+            wifi_hal_error_print("%s:%d failed to resize wpabuf\n", __func__, __LINE__);
+            os_free(buf);
+            return RETURN_ERR;
+        }
         wpabuf_put_u8(wpa_buf, WLAN_EID_MEASURE_REPORT);
         wpabuf_put_u8(wpa_buf, 3 + data_len);
         wpabuf_put_u8(wpa_buf, 0x01);
@@ -1129,6 +1198,11 @@ int wifi_rrm_send_beacon_resp(unsigned int ap_index, wifi_neighbor_ap2_t *bss,
     }
     u8 *wpos = wpabuf_mhead_u8(wpa_buf);
     struct wpabuf *report = wpabuf_alloc(wpabuf_len(wpa_buf) + 3);
+    if (report == NULL) {
+        wifi_hal_error_print("%s:%d Failed to allocate memory for report\n", __func__, __LINE__);
+        os_free(wpa_buf);
+        return RETURN_ERR;
+    }
     wpabuf_put_u8(report, WLAN_ACTION_RADIO_MEASUREMENT);
     wpabuf_put_u8(report, WLAN_RRM_RADIO_MEASUREMENT_REPORT);
     wpabuf_put_u8(report, token);
@@ -1139,6 +1213,7 @@ int wifi_rrm_send_beacon_resp(unsigned int ap_index, wifi_neighbor_ap2_t *bss,
     backhaul = &interface->u.sta.backhaul;
     wifi_hal_send_mgmt_frame(ap_index, backhaul->bssid, wpabuf_head(report), wpabuf_len(report), 0, 0);
     os_free(wpa_buf);
+    wpabuf_free(report);
     return RETURN_OK;
 }
 
@@ -1294,8 +1369,13 @@ int wifi_hal_parse_rm_beaon_report(unsigned int apIndex, char *buff, size_t len,
             ie[3], ie[4]);
 
         if (ie[3] != MEASUREMENT_REPORT_MODE_ACCEPT) {
-            wifi_hal_dbg_print("%s:%d: Invalid report\n", __func__, __LINE__);
-            return RETURN_ERR;
+            /* STA refused/incapable/late — skip this element but continue so
+             * the caller receives an empty (size=0) report instead of an error.
+             * This allows a Beacon Metrics Response with no entries to be sent. */
+            wifi_hal_dbg_print("%s:%d: Non-zero report mode 0x%x (refused/incapable/late), skipping element\n",
+                __func__, __LINE__, ie[3]);
+            pos = ie + ie[1] + 2;
+            continue;
         }
         /* Report type */
         switch (ie[4]) {
@@ -1314,12 +1394,23 @@ int wifi_hal_parse_rm_beaon_report(unsigned int apIndex, char *buff, size_t len,
     }
     if (resp == NULL) {
         wifi_hal_error_print("%s:%d: NULL Pointer\n", __func__, __LINE__);
+        darray_cleanup(&reps);
         return RETURN_ERR;
     }
     resp->dialog_token = dialog_token;
     resp->size = reps.size;
-    resp->beacon_repo = (wifi_BeaconReport_t *)malloc(sizeof(wifi_BeaconReport_t) * resp->size);
-    memcpy(resp->beacon_repo, reps.data, sizeof(wifi_BeaconReport_t) * resp->size);
+    if (resp->size == 0) {
+        resp->beacon_repo = NULL;
+    } else {
+        resp->beacon_repo = (wifi_BeaconReport_t *)malloc(sizeof(wifi_BeaconReport_t) * resp->size);
+        if (resp->beacon_repo == NULL) {
+            wifi_hal_error_print("%s:%d: malloc failed for beacon report (%zu bytes)\n",
+                __func__, __LINE__, sizeof(wifi_BeaconReport_t) * resp->size);
+            darray_cleanup(&reps);
+            return RETURN_ERR;
+        }
+        memcpy(resp->beacon_repo, reps.data, sizeof(wifi_BeaconReport_t) * resp->size);
+    }
     darray_cleanup(&reps);
     return RETURN_OK;
 }
@@ -1429,7 +1520,7 @@ int wifi_hal_parse_rm_beacon_request(unsigned int apIndex, char *buff, size_t le
     return 0;
 }
 
-#if !defined(PLATFORM_LINUX) || defined(_PLATFORM_BANANAPI_R4_)
+#if !defined(PLATFORM_LINUX) || defined(_PLATFORM_BANANAPI_R4_) || defined (_PLATFORM_RASPBERRYPI_)
 int handle_rrm_action_frame(wifi_interface_info_t *interface, const mac_address_t sta,
                     const struct ieee80211_mgmt *mgmt, size_t len, int ssi_signal)
 {

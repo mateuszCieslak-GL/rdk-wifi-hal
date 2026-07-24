@@ -316,7 +316,7 @@ int platform_get_acl_num(int vap_index, uint *acl_count)
     return 0;
 }
 
-int platform_get_chanspec_list(unsigned int radioIndex, wifi_channelBandwidth_t bandwidth, wifi_channels_list_t channels, char *buff)
+int platform_get_chanspec_list(unsigned int radioIndex, wifi_channelBandwidth_t bandwidth, const wifi_channels_list_t *channels, char *buff)
 {
     wifi_hal_dbg_print("%s:%d \n",__func__,__LINE__);    
     return 0;
@@ -431,6 +431,16 @@ INT wifi_setApIsolationEnable(INT apIndex, BOOL enable)
 int platform_get_radio_caps(wifi_radio_index_t index)
 { 
     return 0;
+}
+
+int platform_get_reg_domain(wifi_radio_index_t radioIndex, UINT *reg_domain)
+{
+    return RETURN_OK;
+}
+
+int platform_set_beacon_prot(uint apIndex, bool isEnabled)
+{
+    return RETURN_OK;
 }
 
 INT wifi_getApDeviceRSSI(INT ap_index, CHAR *MAC, INT *output_RSSI)
@@ -635,36 +645,6 @@ INT wifi_getRadioChannel(INT radioIndex, ULONG *output_ulong)
 INT wifi_steering_eventRegister(wifi_steering_eventCB_t event_cb)
 {
     return RETURN_OK;
-}
-
-int wifi_rrm_send_beacon_req(struct wifi_interface_info_t *interface, const u8 *addr,
-    u16 num_of_repetitions, u8 measurement_request_mode, u8 oper_class, u8 channel,
-    u16 random_interval, u16 measurement_duration, u8 mode, const u8 *bssid,
-    struct wpa_ssid_value *ssid, u8 *rep_cond, u8 *rep_cond_threshold, u8 *rep_detail,
-    const u8 *ap_ch_rep, unsigned int ap_ch_rep_len, const u8 *req_elem, unsigned int req_elem_len,
-    u8 *ch_width, u8 *ch_center_freq0, u8 *ch_center_freq1, u8 last_indication)
-{
-    return 0;
-}
-
-/* called by BTM API */
-int wifi_wnm_send_bss_tm_req(struct wifi_interface_info_t *interface, struct sta_info *sta,
-    u8 dialog_token, u8 req_mode, int disassoc_timer, u8 valid_int, const u8 *bss_term_dur,
-    const char *url, const u8 *nei_rep, size_t nei_rep_len, const u8 *mbo_attrs, size_t mbo_len)
-{
-    return 0;
-}
-
-int handle_wnm_action_frame(struct wifi_interface_info_t *interface, const mac_address_t sta,
-    struct ieee80211_mgmt *mgmt, size_t len)
-{
-    return 0;
-}
-
-int handle_rrm_action_frame(struct wifi_interface_info_t *interface, const mac_address_t sta,
-    const struct ieee80211_mgmt *mgmt, size_t len, int ssi_signal)
-{
-    return 0;
 }
 
 INT wifi_setApManagementFramePowerControl(INT apIndex, INT dBm)

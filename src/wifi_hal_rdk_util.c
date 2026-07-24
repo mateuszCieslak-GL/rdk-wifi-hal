@@ -56,6 +56,7 @@
 #include <cjson/cJSON.h>
 #include <sys/types.h>
 #include <ifaddrs.h>
+#include <limits.h>
 
 /* WPS_METHOD_LIMIT */
 /* WIFI_ONBOARDINGMETHODS_USBFLASHDRIVE | WIFI_ONBOARDINGMETHODS_ETHERNET | WIFI_ONBOARDINGMETHODS_LABEL | WIFI_ONBOARDINGMETHODS_DISPLAY | WIFI_ONBOARDINGMETHODS_EXTERNALNFCTOKEN | WIFI_ONBOARDINGMETHODS_INTEGRATEDNFCTOKEN | WIFI_ONBOARDINGMETHODS_NFCINTERFACE | WIFI_ONBOARDINGMETHODS_PUSHBUTTON | WIFI_ONBOARDINGMETHODS_PIN | WIFI_ONBOARDINGMETHODS_PHYSICALPUSHBUTTON | WIFI_ONBOARDINGMETHODS_PHYSICALDISPLAY | WIFI_ONBOARDINGMETHODS_VIRTUALPUSHBUTTON |WIFI_ONBOARDINGMETHODS_VIRTUALDISPLAY | WIFI_ONBOARDINGMETHODS_EASYCONNECT  = 0x7FFF */ 
@@ -69,7 +70,7 @@ wifi_device_callbacks_t *get_device_callbacks()
     return &g_device_callbacks;
 }
 #if !defined(PLATFORM_LINUX)
-char *to_mac_str (mac_address_t mac, mac_addr_str_t key) {
+char *to_mac_str (const mac_address_t mac, mac_addr_str_t key) {
     snprintf(key, 18, "%02x:%02x:%02x:%02x:%02x:%02x",
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
@@ -124,6 +125,7 @@ static int move_radio_capability(wifi_radio_capabilities_t *tmp_cap, wifi_radio_
     unsigned j = 0;
 
     tmp_cap->index = cap->index;
+    tmp_cap->rdk_radio_index = cap->rdk_radio_index;
     tmp_cap->numSupportedFreqBand = 1;
     tmp_cap->band[0] = cap->band[arr_loc];
     memcpy(&tmp_cap->channel_list[0], &cap->channel_list[arr_loc], sizeof(wifi_channels_list_t));
@@ -156,9 +158,39 @@ static int move_radio_capability(wifi_radio_capabilities_t *tmp_cap, wifi_radio_
     tmp_cap->cipherSupported = cap->cipherSupported;
     tmp_cap->numcountrySupported = cap->numcountrySupported;
     tmp_cap->maxNumberVAPs = cap->maxNumberVAPs;
+    tmp_cap->mldOperationalCap = cap->mldOperationalCap;
+    tmp_cap->TIDLinkMapNegotiation = cap->TIDLinkMapNegotiation;
     for (j=0 ; j<tmp_cap->numcountrySupported ; j++) {
         tmp_cap->countrySupported[j] = cap->countrySupported[j];
     }
+    // Copy HT and VHT capability fields
+    tmp_cap->ht_capab = cap->ht_capab;
+    memcpy(tmp_cap->mcs_set, cap->mcs_set, HT_MCS_SET_LEN);
+    tmp_cap->ampdu_params = cap->ampdu_params;
+    tmp_cap->vht_capab = cap->vht_capab;
+    memcpy(tmp_cap->vht_mcs_set, cap->vht_mcs_set, VHT_MCS_SET_LEN);
+
+    // Copy HE (WiFi6) and EHT (WiFi7) capability fields
+    tmp_cap->wifi6_supported = cap->wifi6_supported;
+    memcpy(tmp_cap->he_phy_cap, cap->he_phy_cap, HE_MAX_PHY_CAPAB_SIZE);
+    memcpy(tmp_cap->he_mac_cap, cap->he_mac_cap, HE_MAX_MAC_CAPAB_SIZE);
+    memcpy(tmp_cap->he_mcs_nss_set, cap->he_mcs_nss_set, HE_MAX_MCS_CAPAB_SIZE);
+    memcpy(tmp_cap->he_ppet, cap->he_ppet, HE_MAX_PPET_CAPAB_SIZE);
+    tmp_cap->he_6ghz_capa = cap->he_6ghz_capa;
+    tmp_cap->wifi7_supported = cap->wifi7_supported;
+    tmp_cap->eht_mac_cap = cap->eht_mac_cap;
+    memcpy(tmp_cap->eht_phy_cap, cap->eht_phy_cap, EHT_PHY_CAPAB_LEN);
+    memcpy(tmp_cap->eht_mcs, cap->eht_mcs, EHT_MCS_NSS_CAPAB_LEN);
+    memcpy(tmp_cap->eht_ppet, cap->eht_ppet, EHT_PPE_THRESH_CAPAB_LEN);
+
+    tmp_cap->boot_only = cap->boot_only;
+    tmp_cap->scan_impact = cap->scan_impact;
+    tmp_cap->min_scan_interval = cap->min_scan_interval;
+    size_t max_entries = sizeof(tmp_cap->op_class_ch_list) / sizeof(tmp_cap->op_class_ch_list[0]);
+    size_t n = cap->num_op_class_entries < max_entries ? cap->num_op_class_entries : max_entries;
+    tmp_cap->num_op_class_entries = (UINT)n;
+    memcpy(tmp_cap->op_class_ch_list, cap->op_class_ch_list,
+            n * sizeof(tmp_cap->op_class_ch_list[0]));
     memcpy(cap, tmp_cap, sizeof(wifi_radio_capabilities_t));
     return RETURN_OK;
 }
@@ -361,7 +393,12 @@ int validate_wifi_interface_vap_info_params(wifi_vap_info_t *vap_info, char *msg
         ret = RETURN_ERR;
         snprintf(msg + strlen(msg), len - strlen(msg), " showSsid: %d", bss_info->showSsid);
     }
-
+#ifndef TARGET_GEMINI7_2
+    if (strncmp(vap_info->bridge_name, "", strlen(vap_info->bridge_name)) == 0) {
+        ret = RETURN_ERR;
+        snprintf(msg + strlen(msg), len - strlen(msg), " Bridge name is null for vap index %u", vap_info->vap_index);
+    }
+#endif
     // security parameter values
     if (bss_info->security.mode <= 0 || bss_info->security.mode >  wifi_security_mode_wpa3_compatibility ||
             (bss_info->security.mode &(bss_info->security.mode - 1)) != 0) {
@@ -382,6 +419,9 @@ int validate_wifi_interface_vap_info_params(wifi_vap_info_t *vap_info, char *msg
     case wifi_encryption_tkip:
     case wifi_encryption_aes:
     case wifi_encryption_aes_tkip:
+#ifdef CONFIG_IEEE80211BE
+    case wifi_encryption_aes_gcmp256:
+#endif /* CONFIG_IEEE80211BE */
         break;
     default:
         ret = RETURN_ERR;
@@ -460,12 +500,17 @@ cJSON *json_open_file(const char *file_name)
     }
     fseek(fp, 0, SEEK_END);
     len = ftell(fp);
+    if (len == UINT_MAX) {
+        fclose(fp);
+        return json;
+    }
     fseek(fp, 0, SEEK_SET);
 
     buff = malloc(len);
     if (buff == NULL) {
         wifi_hal_error_print("%s:%d: Failed to allocate %zu bytes for json file\n", __func__,
             __LINE__, len);
+        fclose(fp);
         return NULL;
     }
     len = fread(buff, 1, len, fp);
@@ -609,3 +654,23 @@ int wifi_convert_freq_band_to_radio_index(int band, int *radio_index)
     }
     return status;
 }
+
+#if defined(CONFIG_IEEE80211BE) && (HOSTAPD_VERSION >= 211)
+void wifi_get_mld_eml_cap(const u16 mld_cap, const u16 eml_cap, wifi_multi_link_modes_t *mode_val, BOOL *tid_neg)
+{
+    if (mode_val)
+        *mode_val = 0;
+
+    if (tid_neg)
+        *tid_neg = !!(mld_cap & EHT_ML_MLD_CAPA_TID_TO_LINK_MAP_NEG_SUPP_MSK);
+    if (mode_val && ((mld_cap & EHT_ML_MLD_CAPA_MAX_NUM_SIM_LINKS_MASK) > 0))
+        *mode_val |= STR;
+    if (mode_val && (eml_cap & EHT_ML_EML_CAPA_EMLMR_SUPP))
+        *mode_val |= eMLMR;
+    if (mode_val && (eml_cap & EHT_ML_EML_CAPA_EMLSR_SUPP))
+        *mode_val |= eMLSR;
+
+    /* FIXME the NSTR is basic MLO mode, with enhanced EMLSR if supported assume supported always */
+    // *mode_val |= NSTR;
+}
+#endif //(CONFIG_IEEE80211BE) && (HOSTAPD_VERSION >= 211)

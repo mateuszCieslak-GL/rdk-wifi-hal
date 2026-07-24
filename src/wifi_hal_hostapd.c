@@ -296,7 +296,11 @@ void init_hostap_bss(wifi_interface_info_t *interface)
     conf->max_auth_rounds_short = 50;
 #endif
 
+#ifdef TARGET_GEMINI7_2
+    conf->send_probe_response = 0;
+#else
     conf->send_probe_response = 1;
+#endif
 
 #ifdef CONFIG_HS20
 //Not Defined
@@ -348,15 +352,15 @@ void init_oem_config(wifi_interface_info_t *interface)
         wifi_hal_dbg_print("%s:%d: WPS, invalid device_type\n", __func__, __LINE__);
     }
 
-    strcpy(interface->device_name, device_info.device_name);
-    strcpy(interface->manufacturer,  device_info.manufacturer);
-    strcpy(interface->model_name, device_info.model_name);
-    strcpy(interface->model_number, device_info.model_number);
-    strcpy(interface->serial_number, device_info.serial_number);
-    strcpy(interface->friendly_name, device_info.friendly_name);
-    strcpy(interface->manufacturer_url, device_info.manufacturer_url);
-    strcpy(interface->model_description, device_info.model_description);
-    strcpy(interface->model_url, device_info.model_url);
+    snprintf(interface->device_name, sizeof(interface->device_name), "%s", device_info.device_name);
+    snprintf(interface->manufacturer, sizeof(interface->manufacturer), "%s", device_info.manufacturer);
+    snprintf(interface->model_name, sizeof(interface->model_name), "%s", device_info.model_name);
+    snprintf(interface->model_number, sizeof(interface->model_number), "%s", device_info.model_number);
+    snprintf(interface->serial_number, sizeof(interface->serial_number), "%s", device_info.serial_number);
+    snprintf(interface->friendly_name, sizeof(interface->friendly_name), "%s", device_info.friendly_name);
+    snprintf(interface->manufacturer_url, sizeof(interface->manufacturer_url), "%s",device_info.manufacturer_url);
+    snprintf(interface->model_description, sizeof(interface->model_description), "%s", device_info.model_description);
+    snprintf(interface->model_url, sizeof(interface->model_url), "%s", device_info.model_url);
 
 #if !defined(PLATFORM_LINUX)
     conf->ap_vlan = interface->vlan;
@@ -530,7 +534,7 @@ int update_security_config(wifi_vap_security_t *sec, struct hostapd_bss_config *
             break;
         case wifi_security_mode_wpa3_personal:
             conf->wpa_key_mgmt = WPA_KEY_MGMT_SAE;
-#ifdef CONFIG_IEEE80211BE
+#if defined(CONFIG_IEEE80211BE) && defined(CONFIG_MLO)
             conf->wpa_key_mgmt |= (conf->disable_11be ? 0 : WPA_KEY_MGMT_SAE_EXT_KEY);
 #endif /* CONFIG_IEEE80211BE */
 
@@ -542,7 +546,12 @@ int update_security_config(wifi_vap_security_t *sec, struct hostapd_bss_config *
                        __func__, __LINE__, conf->iface, conf->sae_pwe);
             } else {
 #ifdef CONFIG_IEEE80211BE
-                conf->sae_pwe = (1 * !conf->disable_11be);
+                /* Update sae_pwe to 2, for 2G/5G radio interfaces  *
+                 * 0 = Hunt-and-Peck, 1 = Hash-to-Element, 2 = both *
+                 */
+                conf->sae_pwe = (2 * !conf->disable_11be);
+                wifi_hal_info_print("%s:%d: interface_name:%s sae_pwe:%d\n",
+                    __func__, __LINE__, conf->iface, conf->sae_pwe);
 #else
                 conf->sae_pwe = 0;
 #endif /* CONFIG_IEEE80211BE */
@@ -557,7 +566,7 @@ int update_security_config(wifi_vap_security_t *sec, struct hostapd_bss_config *
             break;
         case wifi_security_mode_wpa3_transition:
             conf->wpa_key_mgmt = WPA_KEY_MGMT_PSK | WPA_KEY_MGMT_SAE;
-#ifdef CONFIG_IEEE80211BE
+#if defined(CONFIG_IEEE80211BE) && defined(CONFIG_MLO)
             conf->wpa_key_mgmt |= (conf->disable_11be ? 0 : WPA_KEY_MGMT_SAE_EXT_KEY);
 #endif /* CONFIG_IEEE80211BE */
             conf->auth_algs = WPA_AUTH_ALG_SAE | WPA_AUTH_ALG_SHARED | WPA_AUTH_ALG_OPEN;
@@ -609,6 +618,7 @@ int update_security_config(wifi_vap_security_t *sec, struct hostapd_bss_config *
 
 #ifdef CONFIG_IEEE80211W
     conf->ieee80211w = (enum mfp_options)sec->mfp;
+    conf->beacon_prot = 0;
     switch (conf->ieee80211w) {
         case MGMT_FRAME_PROTECTION_REQUIRED:
             conf->wpa_key_mgmt &= ~(WPA_KEY_MGMT_PSK | WPA_KEY_MGMT_IEEE8021X);
@@ -628,6 +638,14 @@ int update_security_config(wifi_vap_security_t *sec, struct hostapd_bss_config *
                 case wifi_security_mode_wpa_wpa2_enterprise:
                     conf->wpa_key_mgmt |= WPA_KEY_MGMT_IEEE8021X_SHA256;
                     break;
+#ifdef BEACON_PROT
+                case wifi_security_mode_wpa3_compatibility:
+                case wifi_security_mode_wpa3_enterprise:
+                case wifi_security_mode_wpa3_personal:
+                case wifi_security_mode_wpa3_transition:
+                    conf->beacon_prot = 1;
+                    break;
+#endif
                 default:
                     break;
             }
@@ -648,18 +666,18 @@ int update_security_config(wifi_vap_security_t *sec, struct hostapd_bss_config *
 #if defined(CONFIG_IEEE80211BE) && !defined(VNTXER5_PORT) && !defined(TARGET_GEMINI7_2)
         if(is_wifi_hal_6g_radio_from_interfacename(conf->iface) == true) {
             conf->ieee80211w = (enum mfp_options) MGMT_FRAME_PROTECTION_REQUIRED;
-	    if(!conf->disable_11be) {
-	        conf->ieee80211w_rsno = (enum mfp_options) MGMT_FRAME_PROTECTION_REQUIRED; 
-	    }
-    	    wifi_hal_info_print("%s:%d: interface_name:%s disable_11be:%d ieee80211w:%d ieee80211w_rsno:%d \n",
+        if(!conf->disable_11be) {
+            conf->ieee80211w_rsno = (enum mfp_options) MGMT_FRAME_PROTECTION_REQUIRED; 
+        }
+            wifi_hal_info_print("%s:%d: interface_name:%s disable_11be:%d ieee80211w:%d ieee80211w_rsno:%d \n",
                            __func__, __LINE__, conf->iface, conf->disable_11be, conf->ieee80211w, conf->ieee80211w_rsno);
-	}
+    }
 #endif /* CONFIG_IEEE80211BE && !VNTXER5_PORT && !TARGET_GEMINI7_2 */
     }
 #endif
 
-    wifi_hal_dbg_print("%s:%d: security:%d mfp:%d wpa_key_mgmt:%d 11w:%d\n",
-                       __func__, __LINE__, sec->mode, sec->mfp, conf->wpa_key_mgmt, conf->ieee80211w);
+    wifi_hal_dbg_print("%s:%d: security:%d mfp:%d wpa_key_mgmt:%d 11w:%d beacon_prot: %d\n",
+                       __func__, __LINE__, sec->mode, sec->mfp, conf->wpa_key_mgmt, conf->ieee80211w, conf->beacon_prot);
   
     if (conf->wpa_key_mgmt != -1) {
         const int is_ieee802_1x = !!((WPA_KEY_MGMT_IEEE8021X | WPA_KEY_MGMT_IEEE8021X_SHA256) & conf->wpa_key_mgmt);
@@ -705,18 +723,27 @@ int update_security_config(wifi_vap_security_t *sec, struct hostapd_bss_config *
 
         case wifi_encryption_aes:
             conf->wpa_pairwise = WPA_CIPHER_CCMP;
+            break;
+
 #ifdef CONFIG_IEEE80211BE
+        case wifi_encryption_aes_gcmp256:
+            conf->wpa_pairwise = WPA_CIPHER_CCMP;
             switch (sec->mode) {
             case wifi_security_mode_wpa3_personal:
             case wifi_security_mode_wpa3_transition:
             case wifi_security_mode_wpa3_enterprise:
+            case wifi_security_mode_enhanced_open:
                 conf->wpa_pairwise |= (conf->disable_11be ? 0 : WPA_CIPHER_GCMP_256);
+                break;
+            case wifi_security_mode_wpa3_compatibility:
+                /* GCMP-256 is advertised via rsn_pairwise_rsno_2 in RSNO2 IE only;
+                 * must not appear in the main RSN IE pairwise list */
                 break;
             default:
                 break;
             }
-#endif /* CONFIG_IEEE80211BE */
             break;
+#endif /* CONFIG_IEEE80211BE */
 
         case wifi_encryption_aes_tkip:
             conf->wpa_pairwise = wpa_parse_cipher("TKIP CCMP");
@@ -749,7 +776,7 @@ int update_security_config(wifi_vap_security_t *sec, struct hostapd_bss_config *
     conf->rdkb_eap_request_timeout = sec->eap_req_timeout;
     conf->rdkb_eap_request_retries = sec->eap_req_retries;
 #endif
-    if (conf->ieee802_1x || is_open_sec_radius_auth(sec) || conf->mdu) {
+    if (conf->ieee802_1x || is_open_sec_radius_auth(sec) || (conf->mdu && sec->repurposed_radius.ip[0] != '\0')) {
         wifi_radius_settings_t *radius_cfg;
         if (conf->mdu) {
             radius_cfg = &sec->repurposed_radius;
@@ -761,7 +788,7 @@ int update_security_config(wifi_vap_security_t *sec, struct hostapd_bss_config *
             radius_cfg = &sec->u.radius;
         }
         conf->disable_pmksa_caching = sec->disable_pmksa_caching;
-        if (radius_cfg->ip == 0) {
+        if (radius_cfg->ip[0] == '\0') {
             wifi_hal_error_print("%s:%d:Invalid radius server IP configuration in VAP setting\n", __func__, __LINE__);
             return RETURN_ERR;
         }
@@ -794,7 +821,7 @@ int update_security_config(wifi_vap_security_t *sec, struct hostapd_bss_config *
         // nas_identifier
         memset(output, '\0', sizeof(output));
         _syscmd("sh /usr/sbin/deviceinfo.sh -emac", output, sizeof(output));
-	    if (output[strlen(output) - 1] == '\n') {
+        if (output[strlen(output) - 1] == '\n') {
            output[strlen(output) - 1] = '\0';
         }
 
@@ -1100,13 +1127,16 @@ int update_hostap_bss(wifi_interface_info_t *interface)
     struct hostapd_bss_config   *conf;
     wifi_vap_info_t *vap;
     wifi_radio_info_t *radio;
-    mac_addr_str_t  mac_str;
     wifi_radio_operationParam_t *op_param;
     int vlan_id = 0;
     // re-initialize the default parameters
     init_hostap_bss(interface);
 
     vap = &interface->vap_info;
+    /* Initialize interface->bridge from vap configuration early, so it's available for all flows */
+    if (vap->bridge_name[0] != '\0') {
+        strncpy(interface->bridge, vap->bridge_name, sizeof(interface->bridge));
+    }
     radio = get_radio_by_rdk_index(vap->radio_index);
     op_param = &radio->oper_param;
 
@@ -1116,8 +1146,10 @@ int update_hostap_bss(wifi_interface_info_t *interface)
     conf->disable_11be = !radio->iconf.ieee80211be;
 #endif /* CONFIG_IEEE80211BE */
 
-    strcpy(conf->iface, interface->name);
-    strcpy(conf->bridge, interface->bridge);
+    memset(conf->iface, 0, sizeof(conf->iface));
+    memset(conf->bridge, 0, sizeof(conf->bridge));
+    strncpy(conf->iface, interface->name, sizeof(conf->iface) - 1);
+    strncpy(conf->bridge, interface->bridge, sizeof(conf->bridge) - 1);
     sprintf(conf->vlan_bridge, "vlan%d", vap->vap_index);
 
     conf->ctrl_interface = interface->ctrl_interface;
@@ -1127,7 +1159,7 @@ int update_hostap_bss(wifi_interface_info_t *interface)
     memcpy(conf->bssid, interface->mac, sizeof(interface->mac));
 
     memset(conf->ssid.ssid, 0, sizeof(conf->ssid.ssid));
-    strcpy(conf->ssid.ssid, vap->u.bss_info.ssid);
+    memcpy(conf->ssid.ssid, vap->u.bss_info.ssid, sizeof(conf->ssid.ssid));
     conf->ssid.ssid_len = strlen(vap->u.bss_info.ssid);
     if (!conf->ssid.ssid_len)
         conf->ssid.ssid_set = 0;
@@ -1149,6 +1181,22 @@ int update_hostap_bss(wifi_interface_info_t *interface)
 
     conf->isolate = vap->u.bss_info.isolation;
     wifi_hal_dbg_print("%s:%d: AP isolate:%d \r\n", __func__, __LINE__, conf->isolate);
+
+#if defined(EASY_MESH_NODE)
+    if (is_backhaul_interface(interface)) {
+        // For backhaul VAPs, set multi-ap flag to 1
+        conf->multi_ap = BACKHAUL_BSS;
+
+        /* Enable WDS mode for backhaul STAs to create per-STA virtual interfaces
+         * This allows 4-address frames and proper bridge forwarding
+         */
+        conf->wds_sta = 1;
+        strncpy(conf->wds_bridge, interface->bridge, sizeof(conf->wds_bridge));
+
+        wifi_hal_info_print("%s:%d: Enabled multi_ap:%d for interface:%s, wds_bridge:%s\n",
+            __func__, __LINE__, conf->multi_ap, interface->name, conf->wds_bridge);
+    }
+#endif // EASY_MESH_NODE
 
 #if defined(CONFIG_WPS)
     wifi_hal_wps_init(radio, vap, conf);
@@ -1240,7 +1288,6 @@ int update_hostap_bss(wifi_interface_info_t *interface)
     
     //hessid
 
-    strcpy(conf->hessid, to_mac_str(vap->u.bss_info.interworking.interworking.hessid, mac_str));
     to_mac_bytes((vap->u.bss_info.interworking.interworking.hessid), conf->hessid);
     wifi_hal_dbg_print(" %s: %s 802.11u - NEW IW_En=%d access_network_type=%d conf->[venue_info_set=%d venue_group=%d venue_type=%d hessid="MACF"]\n",
                 __func__, interface->name, conf->interworking, conf->access_network_type,
@@ -1433,6 +1480,9 @@ int update_hostap_iface_flags(wifi_interface_info_t *interface)
 int update_hostap_iface(wifi_interface_info_t *interface)
 {
     struct hostapd_iface   *iface;
+#if defined(BANANA_PI_PORT) && defined(KERNEL_6_12)
+    struct hostapd_data *hdata = interface ? &interface->u.ap.hapd : NULL;
+#endif // BANANA_PI_PORT && KERNEL_6_12
     wifi_vap_info_t *vap;
     wifi_radio_info_t *radio;
     //mac_addr_str_t  mac_str;
@@ -1463,6 +1513,12 @@ int update_hostap_iface(wifi_interface_info_t *interface)
 #endif // HOSTAPD_VERSION >= 211
 #endif // CONFIG_IEEE80211BE
 
+#if defined(BANANA_PI_PORT) && defined(KERNEL_6_12)
+    if (hdata == NULL) {
+        return RETURN_ERR;
+    }
+#endif // BANANA_PI_PORT && KERNEL_6_12
+
     if (interface == NULL) {
         return RETURN_ERR;
     }
@@ -1473,7 +1529,8 @@ int update_hostap_iface(wifi_interface_info_t *interface)
     iface = &interface->u.ap.iface;
     iface->interfaces = &radio->interfaces;
     iface->conf = &radio->iconf;
-    strcpy(iface->phy, radio->name);
+    strncpy(iface->phy, radio->name, sizeof(iface->phy) - 1);
+    iface->phy[sizeof(iface->phy) - 1] = '\0';
     iface->state = HAPD_IFACE_ENABLED;
 
     iface->num_bss = 1;
@@ -1521,8 +1578,11 @@ int update_hostap_iface(wifi_interface_info_t *interface)
         }
         return RETURN_ERR;
     }
-
+#if defined(BANANA_PI_PORT) && defined(KERNEL_6_12)
+    hdata->basic_rates = radio->basic_rates[band];
+#else
     iface->basic_rates = radio->basic_rates[band];
+#endif // BANANA_PI_PORT && KERNEL_6_12
 
     get_coutry_str_from_code(param->countryCode, country);
     iface->freq = ieee80211_chan_to_freq(country, param->operatingClass, param->channel);
@@ -1532,6 +1592,14 @@ int update_hostap_iface(wifi_interface_info_t *interface)
     if (iface->current_mode == NULL) {
         wifi_hal_error_print("%s:%d failed to get mode, interface: %s hw mode: %d, freq: %d\n",
             __func__, __LINE__, interface->name, iface->conf->hw_mode, iface->freq);
+        if (preassoc_supp_rates) {
+           os_free(preassoc_supp_rates);
+           preassoc_supp_rates = NULL;
+        }
+        if (preassoc_basic_rates) {
+           os_free(preassoc_basic_rates);
+           preassoc_basic_rates = NULL;
+        }
         return RETURN_ERR;
     }
 #else
@@ -1540,6 +1608,24 @@ int update_hostap_iface(wifi_interface_info_t *interface)
     mode = iface->current_mode;
 
     if ((strlen (vap->u.bss_info.preassoc.supported_data_transmit_rates) > 0) && strcmp(vap->u.bss_info.preassoc.supported_data_transmit_rates, "disabled")) {
+#if defined(BANANA_PI_PORT) && defined(KERNEL_6_12)
+        if(hdata->current_cac_rates) {
+            os_free(hdata->current_cac_rates);
+        }
+        hdata->current_cac_rates = os_calloc(mode->num_rates, sizeof(struct hostapd_rate_data));
+        if (!hdata->current_cac_rates) {
+            wifi_hal_info_print("%s:%d Failed to allocate memory\n",__func__,__LINE__);
+            if(preassoc_supp_rates) {
+                os_free(preassoc_supp_rates);
+                preassoc_supp_rates = NULL;
+            }
+            if(preassoc_basic_rates) {
+                os_free(preassoc_basic_rates);
+                preassoc_basic_rates = NULL;
+            }
+            return RETURN_ERR;
+        }
+#else
         if(iface->current_cac_rates) {
             os_free(iface->current_cac_rates);
         }
@@ -1556,9 +1642,14 @@ int update_hostap_iface(wifi_interface_info_t *interface)
             }
             return RETURN_ERR;
         }
+#endif // BANANA_PI_PORT && KERNEL_6_12
     }
     else {
+#if defined(BANANA_PI_PORT) && defined(KERNEL_6_12)
+        hdata->current_rates = radio->rate_data[band];
+#else
         iface->current_rates = radio->rate_data[band];
+#endif // BANANA_PI_PORT && KERNEL_6_12
     }
     wifi_hal_info_print("%s:%d: Interface: %s band: %d mode:%p (%d) has %d rates\n", __func__,
         __LINE__, interface->name, band, mode, mode->mode, mode->num_rates);
@@ -1566,9 +1657,12 @@ int update_hostap_iface(wifi_interface_info_t *interface)
     if ((param->variant & WIFI_80211_VARIANT_G) && !(param->variant & WIFI_80211_VARIANT_B)) {
         memcpy(radio->basic_rates[band], basic_rates_g, sizeof(basic_rates_g));
         mode->mode = HOSTAPD_MODE_IEEE80211G;
-    } else if (param->variant & WIFI_80211_VARIANT_B) {
+    } else if ((param->variant & WIFI_80211_VARIANT_B) && !(param->variant & WIFI_80211_VARIANT_G)) {
         memcpy(radio->basic_rates[band], basic_rates_b, sizeof(basic_rates_b));
         mode->mode = HOSTAPD_MODE_IEEE80211B;
+    } else if ((param->variant & WIFI_80211_VARIANT_B) && (param->variant & WIFI_80211_VARIANT_G)) {
+        memcpy(radio->basic_rates[band], basic_rates_bg, sizeof(basic_rates_bg));
+        mode->mode = HOSTAPD_MODE_IEEE80211G;
     } else if (param->variant & WIFI_80211_VARIANT_A) {
         memcpy(radio->basic_rates[band], basic_rates_a, sizeof(basic_rates_a));
         mode->mode = HOSTAPD_MODE_IEEE80211A;
@@ -1587,7 +1681,11 @@ int update_hostap_iface(wifi_interface_info_t *interface)
 
     wifi_hal_info_print("%s:%d: Interface: %s band: %d mode:%p (%d) has %d rates\n", __func__,
         __LINE__, interface->name, band, mode, mode->mode, mode->num_rates);
+#if defined(BANANA_PI_PORT) && defined(KERNEL_6_12)
+    hdata->num_rates = 0;
+#else
     iface->num_rates = 0;
+#endif // BANANA_PI_PORT && KERNEL_6_12
     for (i = 0; i < mode->num_rates; i++) {
 /*
         if (iface->conf->supported_rates &&
@@ -1597,35 +1695,62 @@ int update_hostap_iface(wifi_interface_info_t *interface)
 */
 
         if (preassoc_supp_rates) {
+#if defined(BANANA_PI_PORT) && defined(KERNEL_6_12)
+              if (!int_array_includes(preassoc_supp_rates,
+                      mode->rates[i])) {
+#else
               if (!hostapd_rate_found(preassoc_supp_rates,
                       mode->rates[i])) {
+#endif // BANANA_PI_PORT && KERNEL_6_12
                   continue;
               } else {
+#if defined(BANANA_PI_PORT) && defined(KERNEL_6_12)
+                  rate = &hdata->current_cac_rates[hdata->num_rates];
+#else
                   rate = &iface->current_cac_rates[iface->num_rates];
+#endif // BANANA_PI_PORT && KERNEL_6_12
                   rate->rate = mode->rates[i];
               }
         } else {
+#if defined(BANANA_PI_PORT) && defined(KERNEL_6_12)
+            rate = &hdata->current_rates[hdata->num_rates];
+#else
             rate = &iface->current_rates[iface->num_rates];
+#endif // BANANA_PI_PORT && KERNEL_6_12
             rate->rate = mode->rates[i];
         }
         if (preassoc_basic_rates) { 
+#if defined(BANANA_PI_PORT) && defined(KERNEL_6_12)
+            if (int_array_includes(preassoc_basic_rates, rate->rate)) {
+#else
             if (hostapd_rate_found(preassoc_basic_rates, rate->rate)) {
+#endif // BANANA_PI_PORT && KERNEL_6_12
             rate->flags |= HOSTAPD_RATE_BASIC;
             }
             else {
               rate->flags &= ~(HOSTAPD_RATE_BASIC);
             }
         } else {
+#if defined(BANANA_PI_PORT) && defined(KERNEL_6_12)
+          if (int_array_includes(hdata->basic_rates, rate->rate)) {
+#else
           if (hostapd_rate_found(iface->basic_rates, rate->rate)) {
+#endif // BANANA_PI_PORT && KERNEL_6_12
               rate->flags |= HOSTAPD_RATE_BASIC;
           }
           else {
             rate->flags &= ~(HOSTAPD_RATE_BASIC);
           }
         }
+#if defined(BANANA_PI_PORT) && defined(KERNEL_6_12)
+        wifi_hal_dbg_print("%s:%d: RATE[%d] rate=%d flags=0x%x\n", __func__, __LINE__,
+            hdata->num_rates, rate->rate, rate->flags);
+        hdata->num_rates++;
+#else
         wifi_hal_dbg_print("%s:%d: RATE[%d] rate=%d flags=0x%x\n", __func__, __LINE__,
             iface->num_rates, rate->rate, rate->flags);
         iface->num_rates++;
+#endif // BANANA_PI_PORT && KERNEL_6_12
     }
     cf1 = iface->freq;
     freq1 = cf1;
@@ -1922,6 +2047,7 @@ int update_hostap_config_params(wifi_radio_info_t *radio)
     const struct hostapd_tx_queue_params txq_be = { 3, ecw2cw(aCWmin), 4 * (ecw2cw(aCWmin) + 1) - 1, 0};
     const struct hostapd_tx_queue_params txq_vi = { 1, (ecw2cw(aCWmin) + 1) / 2 - 1, ecw2cw(aCWmin), 30};
     const struct hostapd_tx_queue_params txq_vo = { 1, (ecw2cw(aCWmin) + 1) / 4 - 1, (ecw2cw(aCWmin) + 1) / 2 - 1, 15};
+    char country_code[4] = { 0 };
 
     struct hostapd_config   *iconf;
     wifi_radio_operationParam_t *param;
@@ -2002,6 +2128,10 @@ int update_hostap_config_params(wifi_radio_info_t *radio)
     iconf->ap_table_expiration_time = 60;
     iconf->track_sta_max_age = 180;
 
+#if defined(BANANA_PI_PORT) && HOSTAPD_VERSION >= 211
+    iconf->no_ht_coex = 1;
+#endif // BANANA_PI_PORT && HOSTAPD_VERSION >= 211
+
     iconf->acs = 0;
     iconf->acs_ch_list.num = 0;
 #ifdef CONFIG_ACS
@@ -2055,7 +2185,8 @@ int update_hostap_config_params(wifi_radio_info_t *radio)
     iconf->op_class = param->operatingClass;
 #endif
 
-    get_coutry_str_from_oper_params(param, iconf->country);
+    get_coutry_str_from_oper_params(param, country_code);
+    memcpy(iconf->country, country_code, sizeof(iconf->country));
     // use global operating class in country info
     iconf->country[2] = 0x04;
 
@@ -2208,6 +2339,26 @@ int update_hostap_config_params(wifi_radio_info_t *radio)
 int update_hostap_interface_params(wifi_interface_info_t *interface)
 {
     int ret = RETURN_ERR;
+    if (unlikely(interface == NULL)) {
+        return ret;
+    }
+
+#ifdef CONFIG_GENERIC_MLO
+    if (wifi_hal_is_mld_enabled(interface)) {
+        wifi_interface_info_t *first_interface = wifi_hal_get_first_mld_interface(interface);
+
+        if (first_interface != interface) {
+            wifi_hal_info_print("%s:%d: interface:%s link id:%d set ssid:%s\n", __func__, __LINE__,
+                wifi_hal_get_interface_name(interface), wifi_hal_get_mld_link_id(interface),
+                first_interface->vap_info.u.bss_info.ssid);
+            /* The kernel requires the same SSID for all links in MLD */
+            strncpy(interface->vap_info.u.bss_info.ssid, first_interface->vap_info.u.bss_info.ssid,
+                sizeof(interface->vap_info.u.bss_info.ssid) - 1);
+            interface->vap_info.u.bss_info.ssid[sizeof(interface->vap_info.u.bss_info.ssid) - 1] =
+                '\0';
+        }
+    }
+#endif /* CONFIG_GENERIC_MLO */
 
     pthread_mutex_lock(&g_wifi_hal.hapd_lock);
     // initialize the default params
@@ -2232,7 +2383,7 @@ int update_hostap_interface_params(wifi_interface_info_t *interface)
 #endif
         goto exit;
     }
-#ifdef CONFIG_IEEE80211BE
+#if defined(CONFIG_IEEE80211BE) && defined(CONFIG_MLO)
     if (update_hostap_mlo(interface) != RETURN_OK) {
         goto exit;
     }
@@ -2512,7 +2663,7 @@ static int wpa_sm_sta_get_beacon_ie(void *ctx)
     pthread_mutex_lock(&interface->scan_info_mutex);
     bss = hash_map_get_first(interface->scan_info_map);
     while (bss != NULL) {
-        if (memcmp(backhaul->bssid, bss->bssid, sizeof(bssid_t)) == 0 && bss->ie != NULL) {
+        if (memcmp(backhaul->bssid, bss->bssid, sizeof(bssid_t)) == 0 && bss->ie_len > 0) {
 
             rsn_ie = (ieee80211_tlv_t *)get_ie((unsigned char *)bss->ie, bss->ie_len, WLAN_EID_RSN);
 #if HOSTAPD_VERSION >= 210
@@ -2567,15 +2718,23 @@ static int wpa_sm_sta_key_mgmt_set_pmk(void *ctx, const u8 *pmk,
 
 #if HOSTAPD_VERSION >= 210 //2.10
 static int wpa_sm_sta_add_pmkid(void *ctx, void *network_ctx, const u8 *bssid,
-					const u8 *pmkid, const u8 *fils_cache_id,
-					const u8 *pmk, size_t pmk_len, u32 pmk_lifetime,
-					u8 pmk_reauth_threshold, int akmp)
+                    const u8 *pmkid, const u8 *fils_cache_id,
+                    const u8 *pmk, size_t pmk_len, u32 pmk_lifetime,
+                    u8 pmk_reauth_threshold, int akmp)
 #else
 static int wpa_sm_sta_add_pmkid(void *_wpa_s, void *network_ctx,
                                             const u8 *bssid, const u8 *pmkid,
                                             const u8 *fils_cache_id,
                                             const u8 *pmk, size_t pmk_len)
 #endif
+{
+    wifi_hal_dbg_print("%s:%d: Enter\n", __func__, __LINE__);
+    return 0;
+}
+
+static int wpa_sm_sta_remove_pmkid(void *_wpa_s, void *network_ctx,
+                                            const u8 *bssid, const u8 *pmkid,
+                                            const u8 *fils_cache_id)
 {
     wifi_hal_dbg_print("%s:%d: Enter\n", __func__, __LINE__);
     return 0;
@@ -2596,7 +2755,7 @@ void update_wpa_sm_params(wifi_interface_info_t *interface)
     mac_addr_str_t bssid_str;
     int sel, key_mgmt = 0;
     int wpa_key_mgmt_11w = 0;
-    ieee80211_tlv_t *rsn_ie = NULL;
+    const unsigned char *rsn_ie = NULL;
     unsigned short max_wpa_ie_len = 500;
 #if HOSTAPD_VERSION >= 210
     unsigned short max_rsnx_ie_len = 50;
@@ -2639,7 +2798,8 @@ void update_wpa_sm_params(wifi_interface_info_t *interface)
         ctx->mlme_setprotection = wpa_sm_sta_mlme_setprotection;
         ctx->key_mgmt_set_pmk = wpa_sm_sta_key_mgmt_set_pmk;
         ctx->add_pmkid = wpa_sm_sta_add_pmkid;
-
+        ctx->remove_pmkid = wpa_sm_sta_remove_pmkid;
+        
         interface->u.sta.wpa_sm = wpa_sm_init(ctx);
     }
 #if defined(CONFIG_WIFI_EMULATOR) || defined(BANANA_PI_PORT)
@@ -2686,18 +2846,42 @@ void update_wpa_sm_params(wifi_interface_info_t *interface)
 
     memcpy(sm->bssid, backhaul->bssid, sizeof(mac_address_t));
 
-    pbkdf2_sha1(sec->u.key.key, backhaul->ssid, strlen(backhaul->ssid), 
-        4096, pmk, PMK_LEN);
+    if (pbkdf2_sha1(sec->u.key.key, backhaul->ssid, strlen(backhaul->ssid),
+        4096, pmk, PMK_LEN) != 0) {
+        wifi_hal_error_print("%s:%d: pbkdf2_sha1 failed\n", __func__, __LINE__);
+        return;
+    }
 
     wpa_sm_set_own_addr(sm, interface->mac);
     wpa_sm_set_pmk(sm, pmk, PMK_LEN, NULL, NULL);
     wpa_sm_set_param(sm, WPA_PARAM_RSN_ENABLED, 1);
     wpa_sm_set_param(sm, WPA_PARAM_PROTO, WPA_PROTO_RSN);
+#if HOSTAPD_VERSION >= 211 //2.11
+    wpa_sm_set_param(sm, WPA_PARAM_RSN_OVERRIDE_SUPPORT, false);
+    wpa_sm_set_param(sm, WPA_PARAM_RSN_OVERRIDE, RSN_OVERRIDE_NOT_USED);
 
-    rsn_ie = (ieee80211_tlv_t *)get_ie(backhaul->ie, backhaul->ie_len, WLAN_EID_RSN);
+#if defined(CONFIG_WIFI_EMULATOR)
+#ifdef CONFIG_IEEE80211BE
+    if (sec->mode == wifi_security_mode_wpa3_compatibility && ((rsn_ie =
+        get_vendor_ie_by_type(backhaul->ie, backhaul->ie_len, RSNE_OVERRIDE_2_IE_VENDOR_TYPE)) != NULL)) {
+            wpa_sm_set_param(sm, WPA_PARAM_RSN_OVERRIDE, RSN_OVERRIDE_RSNE_OVERRIDE_2);
+            wifi_hal_dbg_print("%s:%d: Using RSNO2\n", __func__, __LINE__);
+    }
+    else
+#endif //CONFIG_IEEE80211BE
+    if (sec->mode == wifi_security_mode_wpa3_compatibility && ((rsn_ie =
+        get_vendor_ie_by_type(backhaul->ie, backhaul->ie_len, RSNE_OVERRIDE_IE_VENDOR_TYPE)) != NULL)) {
+            wifi_hal_dbg_print("%s:%d: Using RSNO\n", __func__, __LINE__);
+    } else
+#endif
+#endif //2.11
+    {
+        rsn_ie = get_ie(backhaul->ie, backhaul->ie_len, WLAN_EID_RSN);
+        wifi_hal_dbg_print("%s:%d: Using RSN\n", __func__, __LINE__);
+    }
+
     if (rsn_ie &&
-        (wpa_parse_wpa_ie_rsn((const unsigned char *)rsn_ie,
-             rsn_ie->length + sizeof(ieee80211_tlv_t), &data) == 0)) {
+        (wpa_parse_wpa_ie_rsn(rsn_ie, ((ieee80211_tlv_t *)rsn_ie)->length + 2, &data) == 0)) {
         wpa_sm_set_param(sm, WPA_PARAM_PAIRWISE, WPA_CIPHER_CCMP);
         wpa_sm_set_param(sm, WPA_PARAM_GROUP, data.group_cipher);
 
@@ -2719,8 +2903,23 @@ void update_wpa_sm_params(wifi_interface_info_t *interface)
                     sel = (WPA_KEY_MGMT_SAE | wpa_key_mgmt_11w) & data.key_mgmt;
                 } else if (sec->mode == wifi_security_mode_wpa3_enterprise) {
                     sel = (WPA_KEY_MGMT_IEEE8021X_SHA256 | wpa_key_mgmt_11w) & data.key_mgmt;
+                } else if (sec->mode == wifi_security_mode_enhanced_open) {
+                    sel = (WPA_KEY_MGMT_OWE | wpa_key_mgmt_11w) & data.key_mgmt;
                 } else if (sec->mode == wifi_security_mode_wpa3_compatibility) {
-                    sel = (WPA_KEY_MGMT_PSK | WPA_KEY_MGMT_SAE) & data.key_mgmt;
+#if !defined(BANANA_PI_PORT) && (HOSTAPD_VERSION >= 211)
+                    wpa_sm_set_param(sm, WPA_PARAM_RSN_OVERRIDE_SUPPORT, true);
+#ifdef CONFIG_IEEE80211BE
+                    if (wpa_sm_get_rsn_override(sm) == RSN_OVERRIDE_RSNE_OVERRIDE_2) {
+                        wpa_sm_set_param(sm, WPA_PARAM_PAIRWISE, data.pairwise_cipher);
+                        wpa_sm_set_param(sm, WPA_PARAM_MGMT_GROUP, data.mgmt_group_cipher);
+                        sel = (wpa_key_mgmt_11w | WPA_KEY_MGMT_SAE_EXT_KEY) & data.key_mgmt;
+                    } else
+#endif //CONFIG_IEEE80211BE
+#endif //!BANANA_PI_PORT && HOSTAPD_VERSION >= 211
+                    {
+                        sel = (wpa_key_mgmt_11w | WPA_KEY_MGMT_SAE) & data.key_mgmt;
+                    }
+
                 } else {
                     wifi_hal_error_print("Unsupported security mode : 0x%x\n", sec->mode);
                     return;
@@ -2729,7 +2928,9 @@ void update_wpa_sm_params(wifi_interface_info_t *interface)
 #endif
             {
                 sel = (WPA_KEY_MGMT_SAE | WPA_KEY_MGMT_IEEE8021X | WPA_KEY_MGMT_PSK |
-                    WPA_KEY_MGMT_PSK_SHA256 | wpa_key_mgmt_11w) & data.key_mgmt;
+                          WPA_KEY_MGMT_IEEE8021X_SHA256 | WPA_KEY_MGMT_PSK_SHA256 |
+                          wpa_key_mgmt_11w) &
+                    data.key_mgmt;
             }
 
             key_mgmt = pick_akm_suite(sel); 
@@ -2742,10 +2943,10 @@ void update_wpa_sm_params(wifi_interface_info_t *interface)
             wpa_sm_set_param(sm, WPA_PARAM_KEY_MGMT, key_mgmt);
         }
 
-        wifi_hal_dbg_print("%s:%d:%x %x %x\n", __func__, __LINE__, data.group_cipher,
-            data.pairwise_cipher, key_mgmt);
+        wifi_hal_dbg_print("%s:%d:%x %x %x %x\n", __func__, __LINE__, data.group_cipher,
+            data.pairwise_cipher, data.mgmt_group_cipher, key_mgmt);
     } else {
-        if (sec->mode == wifi_security_mode_none) {
+        if (get_vap_security_mode(vap,sec) == wifi_security_mode_none) {
             wpa_sm_set_param(sm, WPA_PARAM_KEY_MGMT, WPA_KEY_MGMT_NONE);
             wpa_sm_set_param(sm, WPA_PARAM_PAIRWISE, WPA_CIPHER_NONE);
             wpa_sm_set_param(sm, WPA_PARAM_GROUP, WPA_CIPHER_NONE);
@@ -2761,20 +2962,22 @@ void update_wpa_sm_params(wifi_interface_info_t *interface)
                 wpa_sm_set_param(sm, WPA_PARAM_GROUP, WPA_CIPHER_TKIP);
             }
 
-            if (sec->mode == wifi_security_mode_wpa2_personal) {
+            if (get_vap_security_mode(vap,sec) == wifi_security_mode_wpa2_personal) {
                 sel = (WPA_KEY_MGMT_PSK | wpa_key_mgmt_11w);
-            } else if (sec->mode == wifi_security_mode_wpa2_enterprise) {
+            } else if (get_vap_security_mode(vap,sec) == wifi_security_mode_wpa2_enterprise) {
                 sel = (WPA_KEY_MGMT_IEEE8021X | wpa_key_mgmt_11w);
-            } else if (sec->mode == wifi_security_mode_wpa3_transition) {
+            } else if (get_vap_security_mode(vap,sec) == wifi_security_mode_wpa3_transition) {
                 sel = (WPA_KEY_MGMT_PSK | WPA_KEY_MGMT_SAE | wpa_key_mgmt_11w);
-            } else if (sec->mode == wifi_security_mode_wpa3_personal) {
+            } else if (get_vap_security_mode(vap,sec) == wifi_security_mode_wpa3_personal) {
                 sel = (WPA_KEY_MGMT_SAE | wpa_key_mgmt_11w);
-            } else if (sec->mode == wifi_security_mode_wpa3_enterprise) {
+            } else if (get_vap_security_mode(vap,sec) == wifi_security_mode_wpa3_enterprise) {
                 sel = (WPA_KEY_MGMT_IEEE8021X_SHA256 | wpa_key_mgmt_11w);
-            } else if (sec->mode == wifi_security_mode_wpa3_compatibility) {
+            } else if (get_vap_security_mode(vap,sec) == wifi_security_mode_enhanced_open) {
+                sel = (WPA_KEY_MGMT_OWE | wpa_key_mgmt_11w);
+            } else if (get_vap_security_mode(vap,sec) == wifi_security_mode_wpa3_compatibility) {
                 sel = (WPA_KEY_MGMT_PSK | WPA_KEY_MGMT_SAE);
             } else {
-                wifi_hal_error_print("Unsupported security mode : 0x%x\n", sec->mode);
+                wifi_hal_error_print("Unsupported security mode : 0x%x\n", get_vap_security_mode(vap, sec));
                 return;
             }
             key_mgmt = pick_akm_suite(sel);
@@ -2785,6 +2988,16 @@ void update_wpa_sm_params(wifi_interface_info_t *interface)
             wpa_sm_set_param(sm, WPA_PARAM_KEY_MGMT, key_mgmt);
         }
     }
+
+#ifdef CONFIG_IEEE80211W
+    // Force MFP for WPA3 modes
+    if (get_vap_security_mode(vap, sec) == wifi_security_mode_wpa3_personal ||
+        get_vap_security_mode(vap, sec) == wifi_security_mode_wpa3_enterprise ||
+        get_vap_security_mode(vap, sec) == wifi_security_mode_wpa3_transition) {
+        wpa_sm_set_param(sm, WPA_PARAM_MFP, MGMT_FRAME_PROTECTION_REQUIRED);
+        wpa_sm_set_param(sm, WPA_PARAM_MGMT_GROUP, WPA_CIPHER_AES_128_CMAC);
+    }
+#endif
 
     if (get_ie_by_eid(WLAN_EID_RSN, assoc_req, interface->u.sta.assoc_req_len, &ie, &ie_len)
                 == true) {
@@ -2906,22 +3119,59 @@ static void wpa_sm_eapol_eap_error_cb(void *ctx, int error_code)
     wifi_hal_dbg_print("%s:%d: Enter\n", __func__, __LINE__);
 }
 
+static void update_eapol_method(wifi_interface_info_t *interface, int eap_type)
+{
+    wifi_hal_dbg_print("%s:%d: eap-type updated as %d\n", __func__, __LINE__, eap_type);
+    switch (eap_type) {
+        case WIFI_EAP_TYPE_PWD:
+            interface->u.sta.wpa_eapol_method.method = EAP_TYPE_PWD;
+            eap_peer_pwd_register();
+            break;
+        case WIFI_EAP_TYPE_MD5:
+            interface->u.sta.wpa_eapol_method.method = EAP_TYPE_MD5;
+            eap_peer_md5_register();
+            break;
+        case WIFI_EAP_TYPE_TLS:
+            interface->u.sta.wpa_eapol_method.method = EAP_TYPE_TLS;
+            eap_peer_tls_register();
+            break;
+        case WIFI_EAP_TYPE_MSCHAPV2:
+            interface->u.sta.wpa_eapol_method.method = EAP_TYPE_MSCHAPV2;
+            eap_peer_mschapv2_register();
+            break;
+        case WIFI_EAP_TYPE_PEAP:
+            interface->u.sta.wpa_eapol_method.method = EAP_TYPE_PEAP;
+            eap_peer_peap_register();
+            break;
+        case WIFI_EAP_TYPE_TTLS:
+            interface->u.sta.wpa_eapol_method.method = EAP_TYPE_TTLS;
+            eap_peer_ttls_register();
+            break;
+        default:
+            wifi_hal_error_print("%s:%d: Unsupported EAP method :%d\n", __func__, __LINE__,
+                    eap_type);
+            return;
+    }
+    wifi_hal_dbg_print("%s:%d: EAPOL method %d\n", __func__, __LINE__, interface->u.sta.wpa_eapol_method.method);
+    return;       
+}
+
 #define MAX_STR_LEN 64
 #define SUPPORTED_CIPHERS \
         "DEFAULT:@SECLEVEL=0"
+
 void update_eapol_sm_params(wifi_interface_info_t *interface)
 {
     struct eapol_ctx *ctx;
     wifi_vap_info_t *vap;
     wifi_vap_security_t *sec;
-
     vap = &interface->vap_info;
     sec = &vap->u.sta_info.security;
 
     if (interface->u.sta.wpa_sm->eapol == NULL) {
         ctx = os_zalloc(sizeof(struct eapol_ctx));
         wifi_hal_info_print("%s:%d: wifi eapol context:%p created for vap_index:%d\n",
-            __func__, __LINE__, ctx, vap->vap_index);
+                __func__, __LINE__, ctx, vap->vap_index);
 
         ctx->ctx = interface;
         ctx->msg_ctx = interface;
@@ -2949,66 +3199,55 @@ void update_eapol_sm_params(wifi_interface_info_t *interface)
         eapol_sm_notify_portControl(interface->u.sta.wpa_sm->eapol, Auto);
 #else
         if ((sec->mode == wifi_security_mode_wpa2_enterprise) ||
-            (sec->mode == wifi_security_mode_wpa3_enterprise)) {
+                (sec->mode == wifi_security_mode_wpa3_enterprise)) {
             eapol_sm_notify_portControl(interface->u.sta.wpa_sm->eapol, Auto);
         } else {
             eapol_sm_notify_portControl(interface->u.sta.wpa_sm->eapol, ForceAuthorized);
         }
 #endif // CONFIG_WIFI_EMULATOR
-        if (sec->mode == wifi_security_mode_wpa2_enterprise ||
-            sec->mode == wifi_security_mode_wpa3_enterprise) {
-            switch (sec->u.radius.eap_type) {
-            case WIFI_EAP_TYPE_PWD:
-                interface->u.sta.wpa_eapol_method.method = EAP_TYPE_PWD;
-                eap_peer_pwd_register();
-                break;
-            case WIFI_EAP_TYPE_MD5:
-                interface->u.sta.wpa_eapol_method.method = EAP_TYPE_MD5;
-                eap_peer_md5_register();
-                break;
-            case WIFI_EAP_TYPE_TLS:
-                interface->u.sta.wpa_eapol_method.method = EAP_TYPE_TLS;
-                eap_peer_tls_register();
-                break;
-            case WIFI_EAP_TYPE_MSCHAPV2:
-                interface->u.sta.wpa_eapol_method.method = EAP_TYPE_MSCHAPV2;
-                eap_peer_mschapv2_register();
-                break;
-            case WIFI_EAP_TYPE_PEAP:
-                interface->u.sta.wpa_eapol_method.method = EAP_TYPE_PEAP;
-                eap_peer_peap_register();
-                break;
-            case WIFI_EAP_TYPE_TTLS:
-                interface->u.sta.wpa_eapol_method.method = EAP_TYPE_TTLS;
-                eap_peer_ttls_register();
-                break;
-            default:
-                wifi_hal_error_print("%s:%d: Unsupported EAP method :%d\n", __func__, __LINE__,
-                    sec->u.radius.eap_type);
-                return;
+        if (vap->u.sta_info.ignite_enabled == true) {
+            wifi_hal_dbg_print("[%s %d] Mode : %d type : %d phase : %d\n",
+                __func__, __LINE__, sec->repurposed_mode, sec->repurposed_radius.eap_type, sec->repurposed_radius.phase2);
+            if (sec->repurposed_mode == wifi_security_mode_wpa2_enterprise ||
+                    sec->repurposed_mode == wifi_security_mode_wpa3_enterprise) {
+                update_eapol_method(interface, sec->repurposed_radius.eap_type);
             }
+        } else {
+            if (sec->mode == wifi_security_mode_wpa2_enterprise ||
+                    sec->mode == wifi_security_mode_wpa3_enterprise) {
+                update_eapol_method(interface, sec->u.radius.eap_type);
+                interface->u.sta.wpa_eapol_config.identity = (unsigned char *)&sec->u.radius.identity;
+                interface->u.sta.wpa_eapol_config.identity = (unsigned char *)&sec->u.radius.identity;
+                interface->u.sta.wpa_eapol_config.identity_len = strlen(sec->u.radius.identity);
+                interface->u.sta.wpa_eapol_config.password = (unsigned char *)&sec->u.radius.key;
+                interface->u.sta.wpa_eapol_config.password_len = strlen(sec->u.radius.key);
+#ifdef PROJECT_IGNITE
+                interface->u.sta.wpa_eapol_config.eap_ttls_ignite_mode = 0;
+#endif            
+            }
+        }
 #ifdef CONFIG_WIFI_EMULATOR
-            if (vap->vap_mode == wifi_vap_mode_sta) {
-                if (interface->wpa_s.current_ssid->eap.openssl_ciphers == NULL) {
-                    interface->wpa_s.current_ssid->eap.openssl_ciphers = (char *)malloc(
+        if (vap->vap_mode == wifi_vap_mode_sta) {
+            if (interface->wpa_s.current_ssid->eap.openssl_ciphers == NULL) {
+                interface->wpa_s.current_ssid->eap.openssl_ciphers = (char *)malloc(
                         MAX_STR_LEN);
-                    if (interface->wpa_s.current_ssid->eap.openssl_ciphers == NULL) {
-                        wifi_hal_error_print("%s:%d: NULL Pointer\n", __func__, __LINE__);
-                        return;
-                    }
+                if (interface->wpa_s.current_ssid->eap.openssl_ciphers == NULL) {
+                    wifi_hal_error_print("%s:%d: NULL Pointer\n", __func__, __LINE__);
+                    return;
                 }
-                memset(interface->wpa_s.current_ssid->eap.openssl_ciphers, 0, MAX_STR_LEN);
-                strncpy(interface->wpa_s.current_ssid->eap.openssl_ciphers, SUPPORTED_CIPHERS,
+            }
+            memset(interface->wpa_s.current_ssid->eap.openssl_ciphers, 0, MAX_STR_LEN);
+            strncpy(interface->wpa_s.current_ssid->eap.openssl_ciphers, SUPPORTED_CIPHERS,
                     MAX_STR_LEN - 1);
+            if (interface->wpa_s.current_ssid->eap.phase2 == NULL) {
+                interface->wpa_s.current_ssid->eap.phase2 = (char *)malloc(MAX_STR_LEN);
                 if (interface->wpa_s.current_ssid->eap.phase2 == NULL) {
-                    interface->wpa_s.current_ssid->eap.phase2 = (char *)malloc(MAX_STR_LEN);
-                    if (interface->wpa_s.current_ssid->eap.phase2 == NULL) {
-                        wifi_hal_error_print("%s:%d: NULL Pointer\n", __func__, __LINE__);
-                        return;
-                    }
+                    wifi_hal_error_print("%s:%d: NULL Pointer\n", __func__, __LINE__);
+                    return;
                 }
-                memset(interface->wpa_s.current_ssid->eap.phase2, 0, MAX_STR_LEN);
-                switch (sec->u.radius.phase2) {
+            }
+            memset(interface->wpa_s.current_ssid->eap.phase2, 0, MAX_STR_LEN);
+            switch (sec->u.radius.phase2) {
                 case WIFI_EAP_PHASE2_PAP:
                     strncpy(interface->wpa_s.current_ssid->eap.phase2, "auth=PAP", MAX_STR_LEN - 1);
                     break;
@@ -3016,28 +3255,66 @@ void update_eapol_sm_params(wifi_interface_info_t *interface)
                     // using PAP as default value.
                     strncpy(interface->wpa_s.current_ssid->eap.phase2, "auth=PAP", MAX_STR_LEN - 1);
                     break;
+            }
+        }
+        interface->wpa_s.current_ssid->eap.fragment_size = 400;
+        interface->wpa_s.current_ssid->eap.identity = (unsigned char *)&sec->u.radius.identity;
+        interface->wpa_s.current_ssid->eap.identity_len = strlen(sec->u.radius.identity);
+        interface->wpa_s.current_ssid->eap.password = (unsigned char *)&sec->u.radius.key;
+        interface->wpa_s.current_ssid->eap.password_len = strlen(sec->u.radius.key);
+        interface->wpa_s.current_ssid->eap.eap_methods = &interface->u.sta.wpa_eapol_method;
+        eapol_sm_notify_portControl(interface->u.sta.wpa_sm->eapol, Auto);
+
+#else
+        wifi_hal_dbg_print("%s:%d: Ignite-status : %d\n", __func__, __LINE__, vap->u.sta_info.ignite_enabled);
+        if (vap->u.sta_info.ignite_enabled == true) {
+            if (vap->vap_mode == wifi_vap_mode_sta) {
+                if (interface->u.sta.wpa_eapol_config.openssl_ciphers == NULL) {
+                    interface->u.sta.wpa_eapol_config.openssl_ciphers = (char *)malloc(MAX_STR_LEN);
+                    if (interface->u.sta.wpa_eapol_config.openssl_ciphers == NULL) {
+                        wifi_hal_error_print("%s:%d: NULL Pointer\n", __func__, __LINE__);
+                        return;
+                    }
+                }
+                memset(interface->u.sta.wpa_eapol_config.openssl_ciphers, 0, MAX_STR_LEN);
+                strncpy(interface->u.sta.wpa_eapol_config.openssl_ciphers, SUPPORTED_CIPHERS,
+                        MAX_STR_LEN - 1);
+                if (interface->u.sta.wpa_eapol_config.phase2 == NULL) {
+                    interface->u.sta.wpa_eapol_config.phase2 = (char *)malloc(MAX_STR_LEN);
+                    if (interface->u.sta.wpa_eapol_config.phase2 == NULL) {
+                        wifi_hal_error_print("%s:%d: NULL Pointer\n", __func__, __LINE__);
+                        return;
+                    }
+                }
+                memset(interface->u.sta.wpa_eapol_config.phase2, 0, MAX_STR_LEN);
+                switch (sec->repurposed_radius.phase2) {
+                    case WIFI_EAP_PHASE2_PAP:
+                        strncpy(interface->u.sta.wpa_eapol_config.phase2, "auth=PAP",
+                                MAX_STR_LEN - 1);
+                        break;
+                    case WIFI_EAP_PHASE2_MSCHAP:
+                        strncpy(interface->u.sta.wpa_eapol_config.phase2, "auth=MSCHAP",
+                                MAX_STR_LEN - 1);
+                        break;
+                    default:
+                        strncpy(interface->u.sta.wpa_eapol_config.phase2, "auth=PAP",
+                                MAX_STR_LEN - 1);
+                        break;
                 }
             }
-            interface->wpa_s.current_ssid->eap.fragment_size = 400;
-            interface->wpa_s.current_ssid->eap.identity = (unsigned char *)&sec->u.radius.identity;
-            interface->wpa_s.current_ssid->eap.identity_len = strlen(sec->u.radius.identity);
-            interface->wpa_s.current_ssid->eap.password = (unsigned char *)&sec->u.radius.key;
-            interface->wpa_s.current_ssid->eap.password_len = strlen(sec->u.radius.key);
-            interface->wpa_s.current_ssid->eap.eap_methods = &interface->u.sta.wpa_eapol_method;
+            interface->u.sta.wpa_eapol_config.fragment_size = 400;
+#ifdef PROJECT_IGNITE
+            interface->u.sta.wpa_eapol_config.eap_ttls_ignite_mode = 1;
+#endif            
             eapol_sm_notify_portControl(interface->u.sta.wpa_sm->eapol, Auto);
-#endif // CONFIG_WIFI_EMULATOR
-            interface->u.sta.wpa_eapol_method.vendor = EAP_VENDOR_IETF;
-            interface->u.sta.wpa_eapol_config.identity = (unsigned char *)&sec->u.radius.identity;
-
-            interface->u.sta.wpa_eapol_config.identity_len = strlen(sec->u.radius.identity);
-            interface->u.sta.wpa_eapol_config.password = (unsigned char *)&sec->u.radius.key;
-            interface->u.sta.wpa_eapol_config.password_len = strlen(sec->u.radius.key);
-
-            interface->u.sta.wpa_eapol_config.eap_methods = &interface->u.sta.wpa_eapol_method;
-            eapol_sm_notify_config(interface->u.sta.wpa_sm->eapol, &interface->u.sta.wpa_eapol_config, NULL);
         }
+#endif // CONFIG_WIFI_EMULATOR
+        interface->u.sta.wpa_eapol_method.vendor = EAP_VENDOR_IETF;
+        interface->u.sta.wpa_eapol_config.eap_methods = &interface->u.sta.wpa_eapol_method;
+        eapol_sm_notify_config(interface->u.sta.wpa_sm->eapol, &interface->u.sta.wpa_eapol_config, NULL);
     }
 }
+
 static int hostapd_setup_bss_internal(struct hostapd_data *hapd)
 {
     int ret;
@@ -3052,27 +3329,31 @@ static int hostapd_setup_bss_internal(struct hostapd_data *hapd)
     return ret;
 }
 
+#ifndef CONFIG_GENERIC_MLO
 #ifdef CONFIG_IEEE80211BE
 #if HOSTAPD_VERSION >= 211
 static int set_mld_shared_resources(struct hostapd_data *hapd)
 {
-    int ret;
+    int ret = RETURN_OK;
 
     if (hapd->mld != NULL && hostapd_mld_is_first_bss(hapd)) {
         struct hostapd_data *link;
+        int link_ret;
         for_each_mld_link(link, hapd) {
             if (hapd == link)
                 continue;
 
-            ret = hostapd_setup_bss_internal(link);
-            if (ret) {
-                wifi_hal_error_print("%s:%d: set shared resources failed for link: %s\n",
-                    __func__, __LINE__, hapd->conf->iface);
-                return RETURN_ERR;
+            wifi_hal_dbg_print("%s:%d: init link iface:%s started:%d\n",
+                __func__, __LINE__, link->conf->iface, link->started);
+            link_ret = hostapd_setup_bss_internal(link);
+            if (link_ret != RETURN_OK) {
+                wifi_hal_error_print("%s:%d: set shared resources failed %d for link: %s - first_bss %s\n",
+                    __func__, __LINE__, link_ret, link->conf->iface, hapd->conf->iface);
+                ret = link_ret;
             }
         }
     }
-    return RETURN_OK;
+    return ret;
 }
 
 static void clear_mld_shared_resources(struct hostapd_data *hapd)
@@ -3082,6 +3363,10 @@ static void clear_mld_shared_resources(struct hostapd_data *hapd)
         for_each_mld_link(link, hapd) {
             if (hapd == link)
                 continue;
+
+            wifi_hal_dbg_print("%s:%d: deinit link iface:%s started:%d\n",
+                __func__, __LINE__, link->conf->iface, link->started);
+
             hostapd_bss_deinit_no_free(link);
             hostapd_free_hapd_data(link);
         }
@@ -3089,23 +3374,30 @@ static void clear_mld_shared_resources(struct hostapd_data *hapd)
 }
 #endif /* HOSTAPD_VERSION >= 211 */
 #endif /* CONFIG_IEEE80211BE */
+#endif /* CONFIG_GENERIC_MLO */
 
 void deinit_bss(struct hostapd_data *hapd)
 {
+#ifndef CONFIG_GENERIC_MLO
 #ifdef CONFIG_IEEE80211BE
 #if HOSTAPD_VERSION >= 211
+    if (hapd && hapd->conf) {
+        wifi_hal_dbg_print("%s:%d: entry iface:%s started:%d is_first_bss:%d\n",
+            __func__, __LINE__, hapd->conf->iface, hapd->started, hostapd_mld_is_first_bss(hapd));
+    }
     clear_mld_shared_resources(hapd);
 #endif
 #endif
+#endif /* CONFIG_GENERIC_MLO */
     hostapd_bss_deinit_no_free(hapd);
     hostapd_free_hapd_data(hapd);
 }
 
 int start_bss(wifi_interface_info_t *interface)
 {
-    int ret;
-    struct hostapd_data     *hapd;
-    struct hostapd_bss_config *conf;
+    int ret, ret_mld = RETURN_OK;
+    struct hostapd_data *hapd = NULL;
+    struct hostapd_bss_config *conf = NULL;
     //struct hostapd_iface *iface;
     //struct hostapd_config *iconf;
     wifi_vap_info_t *vap = &interface->vap_info;
@@ -3129,18 +3421,20 @@ int start_bss(wifi_interface_info_t *interface)
         wifi_hal_error_print("%s:%d: vap:%s:%d create is failed:%d csa status:%d\n", __func__,
             __LINE__, vap->vap_name, vap->vap_index, ret, interface->u.ap.hapd.csa_in_progress);
     }
+#ifndef CONFIG_GENERIC_MLO
 #ifdef CONFIG_IEEE80211BE
 #if HOSTAPD_VERSION >= 211
-    ret = set_mld_shared_resources(hapd);
-    if (ret != RETURN_OK) {
+    ret_mld = set_mld_shared_resources(hapd);
+    if (ret_mld != RETURN_OK) {
         wifi_hal_error_print("%s:%d: vap:%s:%d mld set shared resources failed:%d csa status:%d\n", __func__,
-            __LINE__, vap->vap_name, vap->vap_index, ret, interface->u.ap.hapd.csa_in_progress);
+            __LINE__, vap->vap_name, vap->vap_index, ret_mld, interface->u.ap.hapd.csa_in_progress);
     }
 #endif
 #endif
+#endif /* CONFIG_GENERIC_MLO */
     pthread_mutex_unlock(&g_wifi_hal.hapd_lock);
 
-    return ret;
+    return ret != RETURN_OK ? ret : ret_mld;
 }
 
 wifi_interface_info_t *wifi_hal_get_mbssid_tx_interface(wifi_radio_info_t *radio)

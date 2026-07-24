@@ -20,6 +20,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <stddef.h>
 #include <stdbool.h>
 #include <unistd.h>
 #include <signal.h>
@@ -40,6 +41,10 @@
 #include "ap/dfs.h"
 #ifdef CONFIG_WIFI_EMULATOR
 #include "config_supplicant.h"
+#endif
+
+#if defined(CONFIG_GENERIC_MLO)
+#define MLD_INTERFACE_NAME "mld0"
 #endif
 
 int no_seq_check(struct nl_msg *msg, void *arg)
@@ -103,10 +108,10 @@ int notify_assoc_data(wifi_interface_info_t *interface, struct nlattr **tb,
         mgmt_frame.len = frame_len;
         mgmt_frame.data = (unsigned char *)mgmt;
 #ifdef WIFI_HAL_VERSION_3_PHASE2
-        callbacks->mgmt_frame_rx_callback(vap->vap_index, &mgmt_frame);
+        callbacks->mgmt_frame_rx_callback(vap->vap_index, &mgmt_frame, 0);
 #else
         callbacks->mgmt_frame_rx_callback(vap->vap_index, sta_mac, (unsigned char *)mgmt, frame_len,
-            mgmt_type, dir);
+            mgmt_type, dir, 0);
 #endif
 
         for (unsigned int i = 0; i < hooks->num_hooks; i++) {
@@ -222,6 +227,7 @@ static void nl80211_associate_event(wifi_interface_info_t *interface, struct nla
     const struct ieee80211_mgmt *mgmt;
     u16 status = 0;
     size_t len = 0;
+    uint32_t radio_index = 0;
 
     memset(&event, 0, sizeof(event));
     wifi_hal_dbg_print("%s:%d: Enter \n", __func__, __LINE__);
@@ -262,9 +268,12 @@ static void nl80211_associate_event(wifi_interface_info_t *interface, struct nla
     }
 
     if (interface->vap_info.radio_index < MAX_NUM_RADIOS) {
-        wifi_hal_dbg_print("%s:%d: set beacon ie for radio_index:%d\n", __func__,
-            __LINE__, interface->vap_info.radio_index);
-        wifi_ie_info_t *bss_ie = &interface->bss_elem_ie[interface->vap_info.radio_index];
+        wifi_convert_freq_band_to_radio_index(interface->u.sta.backhaul.oper_freq_band,
+            (int *)&radio_index);
+
+        wifi_hal_dbg_print("%s:%d: set beacon ie for radio_index:%d sta radio:%d\n", __func__,
+            __LINE__, interface->vap_info.radio_index, radio_index);
+        wifi_ie_info_t *bss_ie = &interface->bss_elem_ie[radio_index];
         wpa_hexdump(MSG_MSGDUMP, "ASSOC_BSS_IE", bss_ie->buff, bss_ie->buff_len);
         event.assoc_info.beacon_ies = bss_ie->buff;
         event.assoc_info.beacon_ies_len = bss_ie->buff_len;
@@ -330,7 +339,7 @@ static void nl80211_frame_tx_status_event(wifi_interface_info_t *interface, stru
     int sig_dbm = -100;
 #if defined(TCXB7_PORT) || defined(CMXB7_PORT) || defined(TCXB8_PORT) || defined(XB10_PORT) || \
     defined (TCHCBRV2_PORT) || defined(SCXER10_PORT) || defined(VNTXER5_PORT) || \
-    defined (TARGET_GEMINI7_2) || defined(SCXF10_PORT) || defined(RDKB_ONE_WIFI_PROD)
+    defined (TARGET_GEMINI7_2) || defined(SCXF10_PORT) || defined(RDKB_ONE_WIFI_PROD) || defined(XER2_PORT)
     int phy_rate = 60;
 #endif
 #ifdef CONFIG_GENERIC_MLO
@@ -365,7 +374,7 @@ static void nl80211_frame_tx_status_event(wifi_interface_info_t *interface, stru
     }
 #if defined(TCXB7_PORT) || defined(CMXB7_PORT) || defined(TCXB8_PORT) || defined(XB10_PORT) || \
     defined(SCXER10_PORT) || defined (TCHCBRV2_PORT) || defined(VNTXER5_PORT) || \
-    defined (TARGET_GEMINI7_2) || defined(SCXF10_PORT) || defined(RDKB_ONE_WIFI_PROD)
+    defined (TARGET_GEMINI7_2) || defined(SCXF10_PORT) || defined(RDKB_ONE_WIFI_PROD) || defined(XER2_PORT)
     if (tb[NL80211_ATTR_RX_PHY_RATE_INFO]) {
         phy_rate = nla_get_u32(tb[NL80211_ATTR_RX_PHY_RATE_INFO]) *10;
     }
@@ -448,7 +457,6 @@ static void nl80211_frame_tx_status_event(wifi_interface_info_t *interface, stru
         switch(event.tx_status.stype) {
          case WLAN_FC_STYPE_AUTH:
             mgmt_type = WIFI_MGMT_FRAME_TYPE_AUTH_RSP;
-
             for (int i = 0; i < callbacks->num_statuscode_cbs; i++) {
                 if (callbacks->statuscode_cb[i] != NULL) {
                     status = le_to_host16(mgmt->u.auth.status_code);
@@ -461,7 +469,6 @@ static void nl80211_frame_tx_status_event(wifi_interface_info_t *interface, stru
             mgmt_type = WIFI_MGMT_FRAME_TYPE_ASSOC_RSP;
             wifi_hal_dbg_print("%s:%d: Received assoc response frame from: %s\n", __func__, __LINE__,
                            to_mac_str(sta, sta_mac_str));
-
             for (int i = 0; i < callbacks->num_statuscode_cbs; i++) {
                 if (callbacks->statuscode_cb[i] != NULL) {
                     status = le_to_host16(mgmt->u.assoc_resp.status_code);
@@ -476,7 +483,6 @@ static void nl80211_frame_tx_status_event(wifi_interface_info_t *interface, stru
             mgmt_type = WIFI_MGMT_FRAME_TYPE_REASSOC_RSP;
             wifi_hal_dbg_print("%s:%d: Received Reassoc response frame from: %s\n", __func__, __LINE__,
                            to_mac_str(sta, sta_mac_str));
-
             for (int i = 0; i < callbacks->num_statuscode_cbs; i++) {
                 if (callbacks->statuscode_cb[i] != NULL) {
                     status = le_to_host16(mgmt->u.reassoc_resp.status_code);
@@ -499,7 +505,9 @@ static void nl80211_frame_tx_status_event(wifi_interface_info_t *interface, stru
                     reason = station->disconnect_reason_code;
                 }
 #endif
+#if !defined(CONFIG_GENERIC_MLO) && (HOSTAPD_VERSION <= 210)
                 ap_free_sta(&interface->u.ap.hapd, station);
+#endif // !defined(CONFIG_GENERIC_MLO)
             }
             pthread_mutex_unlock(&g_wifi_hal.hapd_lock);
 
@@ -534,6 +542,15 @@ static void nl80211_frame_tx_status_event(wifi_interface_info_t *interface, stru
             }
             if ((attr = tb[NL80211_ATTR_REASON_CODE]) != NULL) {
                 reason = nla_get_u16(attr);
+            } else if (event.tx_status.stype == WLAN_FC_STYPE_DEAUTH &&
+                       event.tx_status.data_len >= offsetof(struct ieee80211_mgmt, u.deauth.reason_code) +
+                                                   sizeof(((struct ieee80211_mgmt *)0)->u.deauth.reason_code)) {
+                /* NL80211_ATTR_REASON_CODE is absent for TX status events (AP-originated
+                 * deauth). Read reason directly from the deauth frame body instead.
+                 * The stype guard is redundant (we are inside case WLAN_FC_STYPE_DEAUTH)
+                 * but makes the union-member selection explicit for static analysis.
+                 * WPA_GET_LE16 reads via u8* and is safe regardless of buffer alignment. */
+                reason = WPA_GET_LE16((const u8 *)&mgmt->u.deauth.reason_code);
             }
             pthread_mutex_lock(&g_wifi_hal.hapd_lock);
             station = ap_get_sta(&interface->u.ap.hapd, sta);
@@ -544,7 +561,9 @@ static void nl80211_frame_tx_status_event(wifi_interface_info_t *interface, stru
                     wifi_hal_info_print("reason from disconnect reason code is %d\n",reason);
                 }
 #endif
+#if !defined(CONFIG_GENERIC_MLO) && (HOSTAPD_VERSION <= 210)
                 ap_free_sta(&interface->u.ap.hapd, station);
+#endif // !defined(CONFIG_GENERIC_MLO)
             }
             pthread_mutex_unlock(&g_wifi_hal.hapd_lock);
 
@@ -592,16 +611,16 @@ static void nl80211_frame_tx_status_event(wifi_interface_info_t *interface, stru
             mgmt_frame.len = event.tx_status.data_len;
             mgmt_frame.data = (unsigned char *)event.tx_status.data; 
 #ifdef WIFI_HAL_VERSION_3_PHASE2
-            callbacks->mgmt_frame_rx_callback(vap->vap_index, &mgmt_frame);
+            callbacks->mgmt_frame_rx_callback(vap->vap_index, &mgmt_frame, 0);
 #else
 #if defined(RDK_ONEWIFI) && (defined(TCXB7_PORT) || defined(CMXB7_PORT) || defined(TCXB8_PORT) || \
     defined(XB10_PORT) || defined(SCXER10_PORT) || defined (TCHCBRV2_PORT) || defined(VNTXER5_PORT) || \
-    defined (TARGET_GEMINI7_2) || defined(SCXF10_PORT) || defined(RDKB_ONE_WIFI_PROD))
+    defined (TARGET_GEMINI7_2) || defined(SCXF10_PORT) || defined(RDKB_ONE_WIFI_PROD) || defined(XER2_PORT))
             callbacks->mgmt_frame_rx_callback(vap->vap_index, sta, (unsigned char *)event.tx_status.data,
-                event.tx_status.data_len, mgmt_type, dir, sig_dbm, phy_rate);
+                event.tx_status.data_len, mgmt_type, dir, sig_dbm, phy_rate, 0);
 #else
             callbacks->mgmt_frame_rx_callback(vap->vap_index, sta, (unsigned char *)event.tx_status.data,
-                event.tx_status.data_len, mgmt_type, dir);
+                event.tx_status.data_len, mgmt_type, dir, 0);
 #endif
 #endif
         }
@@ -720,7 +739,11 @@ static void nl80211_connect_event(wifi_interface_info_t *interface, struct nlatt
 
     }
 
-    ieee80211_freq_to_channel_ext(backhaul->freq,0,0,(unsigned char*)&radio_param->operatingClass, (unsigned char*)&radio_param->channel);
+    if (ieee80211_freq_to_channel_ext(backhaul->freq,0,0,(unsigned char*)&radio_param->operatingClass,
+        (unsigned char*)&radio_param->channel) == NUM_HOSTAPD_MODES) {
+        wifi_hal_error_print("%s:%d Failed to get op class for freq : %d\n", __func__, __LINE__, backhaul->freq);
+        return;
+    }
 
     if (tb[NL80211_ATTR_REQ_IE] == NULL) { 
         wifi_hal_dbg_print("%s:%d: req ie attribute absent\n", __func__, __LINE__);
@@ -752,7 +775,7 @@ static void nl80211_connect_event(wifi_interface_info_t *interface, struct nlatt
         wifi_hal_dbg_print("%s:%d: pmkid attribute absent\n", __func__, __LINE__);
     }
 
-    if (sec->mode != wifi_security_mode_none) {
+    if (get_vap_security_mode(&interface->vap_info, sec) != wifi_security_mode_none) {
         eapol_sm_notify_eap_fail(interface->u.sta.wpa_sm->eapol, 0);
         eapol_sm_notify_eap_success(interface->u.sta.wpa_sm->eapol, 0);
         eapol_sm_notify_portEnabled(interface->u.sta.wpa_sm->eapol, TRUE);
@@ -780,7 +803,7 @@ static void nl80211_connect_event(wifi_interface_info_t *interface, struct nlatt
         interface->u.sta.pending_rx_eapol = false;
     }
 
-    if (sec->mode == wifi_security_mode_none) {
+    if (get_vap_security_mode(&interface->vap_info, sec) == wifi_security_mode_none) {
         wpa_sm_set_state(interface->u.sta.wpa_sm, WPA_COMPLETED);
         interface->u.sta.state = WPA_COMPLETED;
         wifi_drv_set_supp_port(interface, 1);
@@ -877,6 +900,30 @@ bool is_channel_supported_on_radio(wifi_freq_bands_t l_band, int freq)
     return false;
 }
 
+bool is_chan_freq_supported_on_radio(wifi_radio_info_t *radio, int freq)
+{
+    enum nl80211_band band = wifi_freq_band_to_nl80211_band(radio->oper_param.band);
+    const struct hostapd_hw_modes *mode = NULL;
+    int i;
+
+    if (band == NUM_NL80211_BANDS) {
+        wifi_hal_stats_error_print("%s:%d: unsupported band (0x%2x)\n", __func__, __LINE__, radio->oper_param.band);
+        return false;
+    }
+
+    mode = &radio->hw_modes[band];
+
+    for (i = 0; i < mode->num_channels; ++i) {
+        struct hostapd_channel_data *channel_data = &radio->channel_data[band][i];
+
+        if (freq == channel_data->freq) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 static void ch_switch_update_hostap_config(wifi_radio_info_t *radio, u8 channel, int op_class,
     int freq, int cf1, int cf2, int hostap_channel_width, int hal_channel_width)
 {
@@ -933,20 +980,6 @@ static void nl80211_ch_switch_notify_event(wifi_interface_info_t *interface, str
     wifi_hal_dbg_print("%s:%d: wifi_chan_event_type: %d interface: %s\n", __func__, __LINE__,
         wifi_chan_event_type, interface->name);
 
-/*  XER10-530
-    XER10 needs to go through 'wl' commands to enable/disable the EHT.
-    It will generate a notify event from driver and the platform EHT function 
-    need to know if the command is done before proceeding further.
-*/
-#if defined(SCXER10_PORT) && defined(CONFIG_IEEE80211BE)
-    bool b_bypass_callback = false;
-    if (g_eht_oneshot_notify) {
-        g_eht_oneshot_notify(interface);
-        g_eht_oneshot_notify = NULL;
-        b_bypass_callback = true;
-    }
-#endif
-
     memset(&radio_channel_param, 0, sizeof(radio_channel_param));
 
     if (tb[NL80211_ATTR_IFINDEX]) {
@@ -965,18 +998,10 @@ static void nl80211_ch_switch_notify_event(wifi_interface_info_t *interface, str
         ch_type = nla_get_u32(tb[NL80211_ATTR_WIPHY_CHANNEL_TYPE]);
     }
 
-#if defined(SCXER10_PORT) && defined(CONFIG_IEEE80211BE) && defined(KERNEL_NO_320MHZ_SUPPORT)
-    radio = get_radio_by_rdk_index(interface->vap_info.radio_index);
-    if (radio && radio->oper_param.band == WIFI_FREQUENCY_6_BAND) { 
-        bw = platform_get_bandwidth(interface);
-    } else {
-#endif
+
     if(tb[NL80211_ATTR_CHANNEL_WIDTH]) {
         bw = nla_get_u32(tb[NL80211_ATTR_CHANNEL_WIDTH]);
     }
-#if defined(SCXER10_PORT) && defined(CONFIG_IEEE80211BE) && defined(KERNEL_NO_320MHZ_SUPPORT)
-    }
-#endif
 
     if(tb[NL80211_ATTR_CENTER_FREQ1]) {
         cf1 = nla_get_u32(tb[NL80211_ATTR_CENTER_FREQ1]);
@@ -1001,14 +1026,22 @@ static void nl80211_ch_switch_notify_event(wifi_interface_info_t *interface, str
     }
 
     wifi_radio_operationParam_t *radio_param;
-    wifi_radio_operationParam_t tmp_radio_param;
+    wifi_radio_operationParam_t *tmp_radio_param = NULL;
     radio_param = &radio->oper_param;
 
     if (is_channel_supported_on_radio(radio_param->band, freq) != true) {
-        wifi_hal_error_print("%s:%d: channel:%d and radio index:%d radio_band:%d not Compatible\n", __func__, __LINE__,
+        wifi_hal_info_print("%s:%d: channel:%d and radio index:%d radio_band:%d not Compatible\n", __func__, __LINE__,
                                     channel, interface->vap_info.radio_index, radio_param->band);
         return;
     }
+
+	if ((radio->oper_param.band == WIFI_FREQUENCY_5L_BAND) || (radio->oper_param.band == WIFI_FREQUENCY_5H_BAND)) {
+		if (is_chan_freq_supported_on_radio(radio, freq) == false) {
+			wifi_hal_dbg_print("%s:%d invalid freq:%d for name:%s\n", __func__, __LINE__,
+					freq, interface->name);
+			return;
+		}
+	}
 
     switch (bw) {
     case NL80211_CHAN_WIDTH_20:
@@ -1044,16 +1077,26 @@ static void nl80211_ch_switch_notify_event(wifi_interface_info_t *interface, str
         break;
     }
 
-    memcpy(&tmp_radio_param, radio_param, sizeof(wifi_radio_operationParam_t));
-    tmp_radio_param.channelWidth = l_channel_width;
-    tmp_radio_param.channel = channel;
-
-    if ((op_class = get_op_class_from_radio_params(&tmp_radio_param)) == -1) {
-        wifi_hal_error_print("%s:%d: failed to get op class for channel: %d, width: %d,"
-            "country: %d\n", __func__, __LINE__, tmp_radio_param.channel,
-            tmp_radio_param.channelWidth, tmp_radio_param.countryCode);
+    tmp_radio_param = (wifi_radio_operationParam_t *)malloc(sizeof(wifi_radio_operationParam_t));
+    if (tmp_radio_param == NULL) {
+        wifi_hal_error_print("%s:%d: malloc failed\n", __func__, __LINE__);
         return;
     }
+    memcpy(tmp_radio_param, radio_param, sizeof(wifi_radio_operationParam_t));
+
+    tmp_radio_param->channelWidth = l_channel_width;
+    tmp_radio_param->channel = channel;
+
+    if ((op_class = get_op_class_from_radio_params(tmp_radio_param)) == -1) {
+        wifi_hal_error_print("%s:%d: failed to get op class for channel: %d, width: %d,"
+            "country: %d\n", __func__, __LINE__, tmp_radio_param->channel,
+            tmp_radio_param->channelWidth, tmp_radio_param->countryCode);
+        free(tmp_radio_param);
+        tmp_radio_param = NULL;
+        return;
+    }
+    free(tmp_radio_param);
+    tmp_radio_param = NULL;
 
     wifi_hal_dbg_print("%s:%d: ifidx: %d vap_name: %s radio: %d channel: %d freq: %d bandwidth: %d "
         "cf1: %d cf2: %d op class: %d channel type: %d radar event type: %d\n", __func__, __LINE__,
@@ -1061,6 +1104,19 @@ static void nl80211_ch_switch_notify_event(wifi_interface_info_t *interface, str
         cf1, cf2, op_class, ch_type, event_type);
 
     if (wifi_chan_event_type == WIFI_EVENT_CHANNELS_CHANGED) {
+        if (radio->configuration_in_progress == true) {
+            wifi_hal_info_print(
+                "%s:%d: drop channel change event, radio configuration in progress\n", __func__,
+                __LINE__);
+            wifi_hal_info_print(
+                "%s:%d: Event dropped - ifidx: %d vap_name: %s radio: %d channel: %d freq: %d "
+                "bandwidth: %d "
+                "cf1: %d cf2: %d op class: %d channel type: %d radar event type: %d\n",
+                __func__, __LINE__, ifidx, interface->vap_info.vap_name,
+                interface->vap_info.radio_index, channel, freq, bw, cf1, cf2, op_class, ch_type,
+                event_type);
+            return;
+        }
 #if defined(EASY_MESH_NODE) && defined(_PLATFORM_BANANAPI_R4_)
         hash_map_foreach(radio->interface_map, sta_interface) {
             if (sta_interface->vap_info.vap_mode == wifi_vap_mode_sta) {
@@ -1106,12 +1162,23 @@ static void nl80211_ch_switch_notify_event(wifi_interface_info_t *interface, str
     radio->prev_channel = channel;
     radio->prev_channelWidth = l_channel_width;
 
-#if defined(SCXER10_PORT) && defined(CONFIG_IEEE80211BE)
+#if defined(SCXER10_PORT) && defined(CONFIG_IEEE80211BE) && (LINUX_VERSION_CODE < KERNEL_VERSION(5, 0, 0))
 /*  XER10-530
-    No need to call the callback function when enabling or disabling EHT
+    XER10 needs to go through 'wl' commands to enable/disable the EHT.
+    It will generate a notify event from driver and the platform EHT function
+    need to know if the command is done before proceeding further.
 */
-    if (b_bypass_callback) return;
+    if (g_eht_event_notify) {
+        bool b_eht_completed;
+
+        b_eht_completed = g_eht_event_notify(interface);
+        if (b_eht_completed) {
+            g_eht_event_notify = NULL;
+        }
+        return;
+    }
 #endif
+
     if ((callbacks != NULL) && (callbacks->channel_change_event_callback) && !(radio_channel_param.sub_event == WIFI_EVENT_RADAR_NOP_FINISHED)) {
         radio_channel_param.radioIndex = interface->vap_info.radio_index;
         radio_channel_param.event = wifi_chan_event_type;
@@ -1226,6 +1293,14 @@ static void nl80211_dfs_radar_event(wifi_interface_info_t *interface, struct nla
 
     if (tb[NL80211_ATTR_RADAR_EVENT]) {
         event_type = nla_get_u32(tb[NL80211_ATTR_RADAR_EVENT]);
+    }
+
+    if ((radio->oper_param.band == WIFI_FREQUENCY_5L_BAND) || (radio->oper_param.band == WIFI_FREQUENCY_5H_BAND)) {
+        if (is_chan_freq_supported_on_radio(radio, freq) == false) {
+            wifi_hal_dbg_print("%s:%d invalid freq:%d for name:%s\n", __func__, __LINE__,
+                    freq, interface->name);
+            return;
+        }
     }
 
     wifi_hal_error_print("%s:%d name:%s freq:%d cf1:%d cf2:%d chan_offset:%d event_type:%d bw:%d bandwidth:%d \n", __func__, __LINE__,
@@ -1587,6 +1662,84 @@ void nl80211_vendor_event_ltq(wifi_interface_info_t *interface, unsigned int sub
 
 #endif // CMXB7_PORT
 
+/* Broadcom vendor OUI and the subcmd / NLA attributes used by the driver
+ * for the WLC_E_FRAME_DROP_UNENC vendor event.  Kept in sync with
+ * wlan/wl_25.1P1/.../wl_cfgvendor_common.h.
+ */
+#define OUI_BRCM 0x001018
+#define BRCM_VENDOR_EVENT_FRAME_DROP_UNENC 3
+
+enum frame_drop_unenc_attr {
+    FRAME_DROP_UNENC_ATTR_UNSPEC,
+    FRAME_DROP_UNENC_ATTR_STA_MAC,
+    FRAME_DROP_UNENC_ATTR_ETHER_TYPE,
+    FRAME_DROP_UNENC_ATTR_MAX
+};
+
+static void nl80211_handle_frame_drop_unenc(wifi_interface_info_t *interface,
+                                            unsigned char *data, size_t len)
+{
+    wifi_device_callbacks_t *callbacks = get_hal_device_callbacks();
+    wifi_vap_info_t *vap = &interface->vap_info;
+    struct nlattr *tb[FRAME_DROP_UNENC_ATTR_MAX];
+    mac_address_t sta_mac;
+    mac_addr_str_t sta_mac_str;
+    unsigned short ether_type = 0;
+
+    if (callbacks == NULL || callbacks->num_frame_drop_unenc_cbs == 0) {
+        return;
+    }
+
+    if (data == NULL || len == 0) {
+        wifi_hal_error_print("%s:%d: nl80211: FRAME_DROP_UNENC vendor event with no payload\n",
+            __func__, __LINE__);
+        return;
+    }
+
+    if (nla_parse(tb, FRAME_DROP_UNENC_ATTR_MAX - 1, (struct nlattr *)data, (int)len, NULL) < 0) {
+        wifi_hal_error_print("%s:%d: nl80211: FRAME_DROP_UNENC nla_parse failed\n",
+            __func__, __LINE__);
+        return;
+    }
+
+    if (tb[FRAME_DROP_UNENC_ATTR_STA_MAC] == NULL ||
+        nla_len(tb[FRAME_DROP_UNENC_ATTR_STA_MAC]) < (int)sizeof(mac_address_t)) {
+        wifi_hal_error_print("%s:%d: nl80211: FRAME_DROP_UNENC missing STA MAC\n",
+            __func__, __LINE__);
+        return;
+    }
+    memcpy(sta_mac, nla_data(tb[FRAME_DROP_UNENC_ATTR_STA_MAC]), sizeof(mac_address_t));
+
+    if (tb[FRAME_DROP_UNENC_ATTR_ETHER_TYPE] != NULL) {
+        ether_type = nla_get_u16(tb[FRAME_DROP_UNENC_ATTR_ETHER_TYPE]);
+    }
+
+    (void)to_mac_str(sta_mac, sta_mac_str);
+
+    wifi_hal_dbg_print("%s:%d: nl80211: FRAME_DROP_UNENC ap_index=%d sta=%s ethertype=0x%04x\n",
+        __func__, __LINE__, vap->vap_index, sta_mac_str, ether_type);
+
+    for (unsigned int i = 0; i < callbacks->num_frame_drop_unenc_cbs; i++) {
+        if (callbacks->frame_drop_unenc_cb[i] != NULL) {
+            callbacks->frame_drop_unenc_cb[i](vap->vap_index, sta_mac_str, ether_type);
+        }
+    }
+}
+
+static void nl80211_vendor_event_brcm(wifi_interface_info_t *interface, unsigned int subcmd,
+                                      unsigned char *data, size_t len)
+{
+    switch (subcmd) {
+        case BRCM_VENDOR_EVENT_FRAME_DROP_UNENC:
+            nl80211_handle_frame_drop_unenc(interface, data, len);
+            break;
+        default:
+            wifi_hal_dbg_print("%s:%d: nl80211: Ignore unsupported BRCM vendor event %u\n",
+                __func__, __LINE__, subcmd);
+            break;
+    }
+}
+
 static void nl80211_vendor_event(wifi_interface_info_t *interface,
                     struct nlattr **tb)
 {
@@ -1620,6 +1773,9 @@ static void nl80211_vendor_event(wifi_interface_info_t *interface,
         nl80211_vendor_event_ltq(interface, subcmd, data, len);
         break;
 #endif // CMXB7_PORT
+    case OUI_BRCM:
+        nl80211_vendor_event_brcm(interface, subcmd, data, len);
+        break;
     default:
         wifi_hal_dbg_print("%s:%d: nl80211: Ignore unsupported vendor event\n", __func__, __LINE__);
         break;
@@ -1697,10 +1853,9 @@ int process_global_nl80211_event(struct nl_msg *msg, void *arg)
     struct nlattr *tb[NL80211_ATTR_MAX + 1];
     unsigned int ifidx = 0;
     int wiphy_idx_rx = -1;
-    //unsigned long wdev_id = 0;
     wifi_radio_info_t *radio;
     wifi_interface_info_t *interface;
-    unsigned int i;
+    int link_id = NL80211_DRV_LINK_ID_NA;
 
     gnlh = nlmsg_data(nlmsg_hdr(msg));
     nla_parse(tb, NL80211_ATTR_MAX, genlmsg_attrdata(gnlh, 0), genlmsg_attrlen(gnlh, 0), NULL);
@@ -1713,54 +1868,101 @@ int process_global_nl80211_event(struct nl_msg *msg, void *arg)
     } else if (tb[NL80211_ATTR_WIPHY]) {
         wiphy_idx_rx = nla_get_u32(tb[NL80211_ATTR_WIPHY]);
     }
-    //else if (tb[NL80211_ATTR_WDEV]) {
-      //  wdev_id = nla_get_u64(tb[NL80211_ATTR_WDEV]);
-    //}
 
-    //wifi_hal_dbg_print("%s:%d:event %d for interface (ifindex %d wdev 0x%llx wiphy %d)\n",
-                //__func__, __LINE__, gnlh->cmd,
-                //ifidx, (long long unsigned int) wdev_id, wiphy_idx_rx);
+#if defined(CONFIG_GENERIC_MLO)
+    if (tb[NL80211_ATTR_MLO_LINK_ID]) {
+        link_id = nla_get_u8(tb[NL80211_ATTR_MLO_LINK_ID]);
+    }
+#endif // CONFIG_GENERIC_MLO
 
-    if (gnlh->cmd == NL80211_CMD_NEW_SCAN_RESULTS ||
-        gnlh->cmd == NL80211_CMD_TRIGGER_SCAN ||
-        gnlh->cmd == NL80211_CMD_SCAN_ABORTED)
-    {
-        /* Special case for SCAN events - don't drop these event even if the interface is not fully configured */
-        interface = get_interface_by_if_index(ifidx);
-        if (interface) {
-            do_process_drv_event(interface, gnlh->cmd, tb);
+    if (tb[NL80211_ATTR_RADAR_EVENT]) {
+        event_type = nla_get_u32(tb[NL80211_ATTR_RADAR_EVENT]);
+    }
+
+    interface = get_interface_by_if_index(ifidx, link_id);
+    switch (gnlh->cmd) {
+    case NL80211_CMD_RADAR_DETECT:
+        // To handle CAC Finish and CAC Abort for DFS. These event involve only the primary
+        // interface of the radio.
+        if (!(event_type == NL80211_RADAR_CAC_FINISHED || event_type == NL80211_RADAR_CAC_ABORTED))
+            break;
+
+        /* fall through */
+    case NL80211_CMD_NEW_SCAN_RESULTS:
+    case NL80211_CMD_TRIGGER_SCAN:
+    case NL80211_CMD_SCAN_ABORTED:
+        /* Special case for SCAN events - don't drop these event even if the interface is not fully
+         * configured */
+#if defined(CONFIG_GENERIC_MLO)
+        /* Only for MLD interface when driver does not send LINK_ID, fallback safely */
+        if (link_id == NL80211_DRV_LINK_ID_NA && interface != NULL &&
+             interface->mld_name[0] != '\0' && strcmp(interface->mld_name, MLD_INTERFACE_NAME) == 0) {
+            wifi_hal_dbg_print("%s:%d: Using MLO fallback path\n",__func__, __LINE__);
+            for (unsigned int i = 0; i < priv->num_radios; i++) {
+                radio = &priv->radio_info[i];
+
+                interface = hash_map_get_first(radio->interface_map);
+                while (interface != NULL) {
+                    /* Process only MLO interfaces */
+                    if (!interface->mld_name[0] || strcmp(interface->mld_name, MLD_INTERFACE_NAME) != 0) {
+                        interface = hash_map_get_next(radio->interface_map, interface);
+                        continue;
+                    }
+
+                    /* If ifindex is present, only process matching interface */
+                    if (ifidx && interface->index != ifidx) {
+                        interface = hash_map_get_next(radio->interface_map, interface);
+                        continue;
+                    }
+
+                    /* get neighbour scan state for the interface */
+                    enum scan_state_type_e nb_scan_state;
+                    pthread_mutex_lock(&interface->scan_state_mutex);
+                    nb_scan_state = interface->scan_state;
+                    pthread_mutex_unlock(&interface->scan_state_mutex);
+                    /* Only process interfaces actively involved in scan */
+                    if (nb_scan_state == WIFI_SCAN_STATE_STARTED) {
+                        wifi_hal_dbg_print("%s:%d: SCAN processing for %s for event %d\n", __func__, __LINE__, interface->name, gnlh->cmd);
+                        do_process_drv_event(interface, gnlh->cmd, tb);
+                    }
+
+                    interface = hash_map_get_next(radio->interface_map, interface);
+                }
+            }
+
             return NL_SKIP;
         }
+#endif /* CONFIG_GENERIC_MLO */
+
+        if (interface != NULL) {
+            wifi_hal_dbg_print("%s:%d: event registered - processing for %s event %d\n", __func__,
+                __LINE__, interface->name, gnlh->cmd);
+            do_process_drv_event(interface, gnlh->cmd, tb);
+        } else {
+            wifi_hal_dbg_print("%s:%d: RADAR or SCAN event skipped, no interface found\n", __func__,
+                __LINE__);
+        }
+        return NL_SKIP;
+    default:
+        break;
     }
 
-    //To handle CAC Finish and CAC Abort for DFS. These event involve only the primary interface of the radio.
-    if(gnlh->cmd == NL80211_CMD_RADAR_DETECT) {
-        event_type = nla_get_u32(tb[NL80211_ATTR_RADAR_EVENT]);
-        if( event_type == NL80211_RADAR_CAC_FINISHED || event_type == NL80211_RADAR_CAC_ABORTED ) {
-            interface = get_interface_by_if_index(ifidx);
-            if(interface) {
+    if (wiphy_idx_rx != -1) {
+        for (unsigned int i = 0; i < priv->num_radios; i++) {
+            radio = &priv->radio_info[i];
+            hash_map_foreach(radio->interface_map, interface) {
+                wifi_hal_dbg_print("%s:%d: event registered - processing for %s event %d\n",
+                    __func__, __LINE__, interface->name, gnlh->cmd);
                 do_process_drv_event(interface, gnlh->cmd, tb);
-                return NL_SKIP;
             }
         }
+        return NL_SKIP;
     }
 
-    for (i = 0; i < priv->num_radios; i++) {
-        radio = &priv->radio_info[i];
-        interface = hash_map_get_first(radio->interface_map);
-        while (interface != NULL) {
-            if ((wiphy_idx_rx != -1) || ((ifidx == interface->index) && (interface->vap_configured == true)) ) {
-                do_process_drv_event(interface, gnlh->cmd, tb);
-            } else {
-                //wifi_hal_dbg_print("%s:%d: Skipping event %d for foreign interface (ifindex %d wdev 0x%llx)\n", 
-                    //__func__, __LINE__,
-                    //gnlh->cmd,
-                    //ifidx, (long long unsigned int) wdev_id);
-            }
-
-            interface = hash_map_get_next(radio->interface_map, interface);
-        }
-
+    if (interface != NULL && interface->vap_configured) {
+        wifi_hal_dbg_print("%s:%d: event registered - processing for %s event %d\n", __func__,
+            __LINE__, interface->name, gnlh->cmd);
+        do_process_drv_event(interface, gnlh->cmd, tb);
     }
 
     return NL_SKIP;

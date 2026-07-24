@@ -57,8 +57,8 @@ int handle_auth_frame(INT ap_index, mac_address_t sta_mac, unsigned char *frame,
 
     callbacks = get_device_callbacks();
 
-    if (dir == wifi_direction_downlink) {
-        if (callbacks->auth_frame_tx_callback != NULL) {
+    if(dir == wifi_direction_downlink) {
+        if         (callbacks->auth_frame_tx_callback != NULL) {
             callbacks->auth_frame_tx_callback(ap_index, sta_mac, frame, len);
         }
     } else if (dir == wifi_direction_uplink) {
@@ -89,8 +89,7 @@ int handle_gas_init_public_action_frame(INT ap_index, mac_address_t sta_mac, uns
 	switch (adv_tuple->adv_proto_id) {
 
 		case wifi_adv_proto_id_vendor_specific:
-			if ((adv_tuple->len == sizeof(dpp_oui) + 2) && (memcmp(adv_tuple->oui, dpp_oui, sizeof(dpp_oui)) == 0) && 
-					(*(adv_tuple->oui + sizeof(dpp_oui)) == DPP_OUI_TYPE) && (*(adv_tuple->oui + sizeof(dpp_oui) + 1) == DPP_CONFPROTO)) {
+			if ((adv_tuple->len == sizeof(dpp_oui) + 2) && (memcmp(adv_tuple->oui, dpp_oui, sizeof(dpp_oui)) == 0) && 					(*(adv_tuple->oui + sizeof(dpp_oui)) == DPP_OUI_TYPE) && (*(adv_tuple->oui + sizeof(dpp_oui) + 1) == DPP_CONFPROTO)) {
 				printf("%s:%d dpp gas initial req frame received callback, length:%d\n", __func__, __LINE__, query_len);
 #if !defined(PLATFORM_LINUX)
    				callback_dpp_config_req_frame_received(ap_index, sta_mac, pgas_req->token, query_req, query_len);
@@ -100,7 +99,7 @@ int handle_gas_init_public_action_frame(INT ap_index, mac_address_t sta_mac, uns
 			break;
 
 		case wifi_adv_proto_id_anqp:
-			printf("%s:%d anqp gas initial req frame received call back, length:%d\n", __func__, __LINE__, query_len);
+																printf("%s:%d anqp gas initial req frame received call back, length:%d\n", __func__, __LINE__, query_len);
    			callback_anqp_gas_init_frame_received(ap_index, sta_mac, pgas_req->token, query_req, query_len);
 			break;
 

@@ -52,7 +52,8 @@ typedef struct wl_runtime_params {
 }wl_runtime_params_t;
 
 static wl_runtime_params_t g_wl_runtime_params[] = {
-    {"he color_collision", "0x7"}
+    {"he color_collision", "0x7"},
+	{"keep_ap_up", "1"}
 };
 
 static void set_wl_runtime_configs (const wifi_vap_info_map_t *vap_map);
@@ -260,6 +261,13 @@ int platform_set_radio_pre_init(wifi_radio_index_t index, wifi_radio_operationPa
         memset(param_name, 0 ,sizeof(param_name));
         sprintf(param_name, "wl%d_country_code", index);
         set_string_nvram_param(param_name, temp_buff);
+    }
+
+    snprintf(param_name, sizeof(param_name), "wl%d_reg_mode", index);
+    if (operationParam->DfsEnabled) {
+        set_string_nvram_param(param_name, "h");
+    } else {
+        set_string_nvram_param(param_name, "d");
     }
 
     if (radio->oper_param.DfsEnabled != operationParam->DfsEnabled) {
@@ -666,7 +674,7 @@ int platform_update_radio_presence(void)
     return 0;
 }
 
-int platform_get_chanspec_list(unsigned int radioIndex, wifi_channelBandwidth_t bandwidth, wifi_channels_list_t channels, char *buff)
+int platform_get_chanspec_list(unsigned int radioIndex, wifi_channelBandwidth_t bandwidth, const wifi_channels_list_t *channels, char *buff)
 {
     wifi_hal_dbg_print("%s:%d \n",__func__,__LINE__);
     return 0;
@@ -727,7 +735,17 @@ int wifi_setApRetrylimit(void *priv)
 
 int platform_set_dfs(wifi_radio_index_t index, wifi_radio_operationParam_t *operationParam)
 {
-    return 0;
+    wifi_hal_info_print("%s:%d DfsEnabled:%u \n", __func__, __LINE__, operationParam->DfsEnabled);
+    if (wifi_setRadioDfsEnable(index, operationParam->DfsEnabled) != RETURN_OK) {
+        wifi_hal_error_print("%s:%d RadioDfsEnable Failed\n", __func__, __LINE__);
+        return RETURN_ERR;
+    }
+
+    if (wifi_applyRadioSettings(index) != RETURN_OK) {
+        wifi_hal_error_print("%s:%d applyRadioSettings Failed\n", __func__, __LINE__);
+        return RETURN_ERR;
+    }
+    return RETURN_OK;
 }
 
 #if defined(FEATURE_HOSTAP_MGMT_FRAME_CTRL)
@@ -978,6 +996,16 @@ int platform_get_radio_caps(wifi_radio_index_t index)
     return RETURN_OK;
 }
 #endif //defined(FEATURE_HOSTAP_MGMT_FRAME_CTRL)
+
+int platform_get_reg_domain(wifi_radio_index_t radioIndex, UINT *reg_domain)
+{
+    return RETURN_OK;
+}
+
+int platform_set_beacon_prot(uint apIndex, bool isEnabled)
+{
+    return RETURN_OK;
+}
 
 INT wifi_sendActionFrameExt(INT apIndex, mac_address_t MacAddr, UINT frequency, UINT wait, UCHAR *frame, UINT len)
 {

@@ -78,14 +78,14 @@ if (a) {
 
 ## Line length
 
-- Use 100 characters line length. Reason: avoid horizontal scrolling while reading the code.
+- Use 120 characters line length. Reason: avoid horizontal scrolling while reading the code.
 ```c
 /* OK */
-printf("parameter1: %d parameter2: %d parameter3: %d parameter4: %d", parameter1,
-    parameter2, parameter3, parameter4);
+printf("parameter1: %d LongParameterName_2: %d LongParameterName_3: %d LongParameterName_4: %d", 
+    parameter1, LongParameterName_2, LongParameterName_3, LongParameterName_4);
 
 /* Wrong */
-printf("parameter1: %d parameter2: %d parameter3: %d parameter4: %d", parameter1, parameter2, parameter3, parameter4);
+printf("parameter1: %d LongParameterName_2: %d LongParameterName_3: %d LongParameterName_4: %d", parameter1, LongParameterName_2, LongParameterName_3, LongParameterName_4);
 ```
 
 - Constant strings longer than one line should be closed on each line by a quote and opened again on the next line.
