@@ -181,12 +181,11 @@ static void nl80211_del_station_event(wifi_interface_info_t *interface, struct n
     memcpy(mac, nla_data(attr), sizeof(mac_address_t));
     wifi_hal_error_print("%s:%d: DEL station:%s, sending event: EVENT_DISASSOC\n", __func__, __LINE__,
         to_mac_str(mac, mac_str));
-
-    snprintf(br_buff,sizeof(br_buff),"bridge fdb del %s dev %s master",to_mac_str(mac, mac_str),interface->name); //deleting fdb entries in bridge
-    system(br_buff);
+snprintf(br_buff,sizeof(br_buff),"bridge fdb del %s dev %s master",to_mac_str(mac, mac_str),interface->name); //deleting fdb entries in bridge
+                                      system(br_buff);
     os_memset(&event, 0, sizeof(event));
     event.disassoc_info.addr = mac;
-    if (interface->vap_info.vap_mode != wifi_vap_mode_ap || is_wifi_hal_vap_mesh_sta(interface->vap_info.vap_index)) {
+    if (        interface->vap_info.vap_mode != wifi_vap_mode_ap || is_wifi_hal_vap_mesh_sta(interface->vap_info.vap_index)) {
 #if defined(BANANA_PI_PORT) && (HOSTAPD_VERSION >= 211)
         supplicant_event(&interface->wpa_s, EVENT_DISASSOC, &event);
 #endif
@@ -271,8 +270,7 @@ static void nl80211_associate_event(wifi_interface_info_t *interface, struct nla
         wifi_convert_freq_band_to_radio_index(interface->u.sta.backhaul.oper_freq_band,
             (int *)&radio_index);
 
-        wifi_hal_dbg_print("%s:%d: set beacon ie for radio_index:%d sta radio:%d\n", __func__,
-            __LINE__, interface->vap_info.radio_index, radio_index);
+        wifi_hal_dbg_print("%s:%d: set beacon ie for radio_index:%d sta radio:%d\n", __func__, __LINE__, interface->vap_info.radio_index, radio_index);
         wifi_ie_info_t *bss_ie = &interface->bss_elem_ie[radio_index];
         wpa_hexdump(MSG_MSGDUMP, "ASSOC_BSS_IE", bss_ie->buff, bss_ie->buff_len);
         event.assoc_info.beacon_ies = bss_ie->buff;
@@ -887,8 +885,7 @@ bool is_channel_supported_on_radio(wifi_freq_bands_t l_band, int freq)
 {
     if (l_band == WIFI_FREQUENCY_2_4_BAND && (freq >= MIN_FREQ_MHZ_2G && freq <= MAX_FREQ_MHZ_2G)) {
         return true;
-    } else if ((l_band == WIFI_FREQUENCY_5L_BAND || l_band == WIFI_FREQUENCY_5H_BAND ||
-                   l_band == WIFI_FREQUENCY_5_BAND) &&
+    } else if ((l_band == WIFI_FREQUENCY_5L_BAND || l_band == WIFI_FREQUENCY_5H_BAND ||                 l_band == WIFI_FREQUENCY_5_BAND) &&
         (freq >= MIN_FREQ_MHZ_5G && freq <= MAX_FREQ_MHZ_5G)) {
         return true;
 #if HOSTAPD_VERSION >= 210

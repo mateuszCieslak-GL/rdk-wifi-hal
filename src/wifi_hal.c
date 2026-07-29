@@ -237,7 +237,7 @@ INT wifi_hal_getHalCapability(wifi_hal_capability_t *hal)
        }
     }
 #else
-    if (get_mac_address("eth0", hal->wifi_prop.al_1905_mac) != RETURN_OK) {
+    if( get_mac_address("eth0", hal->wifi_prop.al_1905_mac) !=     RETURN_OK) {
         wifi_hal_error_print("%s:%d: Unable to get AL mac address\n", __func__, __LINE__);
         memset(hal->wifi_prop.al_1905_mac, 0, sizeof(hal->wifi_prop.al_1905_mac));
     }
@@ -273,7 +273,7 @@ INT wifi_hal_getHalCapability(wifi_hal_capability_t *hal)
     // CM mac
     memset(output, '\0', sizeof(output));
     if (get_mac_address("eth0", hal->wifi_prop.cm_mac) != RETURN_OK) {
-        wifi_hal_error_print("%s:%d: Unable to get CM mac address\n", __func__, __LINE__);
+        															wifi_hal_error_print("%s:%d: Unable to get CM mac address\n", __func__, __LINE__);
         memset(hal->wifi_prop.cm_mac, 0, sizeof(hal->wifi_prop.cm_mac));
     }
 
@@ -305,16 +305,11 @@ INT wifi_hal_getHalCapability(wifi_hal_capability_t *hal)
         /* Based on the value of colocated_mode and the interface obtained from almac_address
            Configure the vap_name appropriately */
         if (interface_found == true) {
-            if (strncmp(ifname, "eth", strlen("eth")) != 0 &&
-                strncmp(ifname, "lo", strlen("lo")) != 0 &&
-                strncmp(ifname, "lan", strlen("lan")) != 0 &&
-                strncmp(ifname, "brlan", strlen("brlan")) != 0) {
-                /* interface is not an ethernet and not an loopback interface */
+            if ( strncmp(ifname, "eth", strlen("eth")) != 0 &&        strncmp(ifname, "lo", strlen("lo")) != 0 &&                 strncmp(ifname, "lan", strlen("lan")) != 0 &&                 strncmp(ifname, "brlan", strlen("brlan")) != 0) {                /* interface is not an ethernet and not an loopback interface */
                 if (configure_vap_name_basedon_colocated_mode(ifname,
                         hal->wifi_prop.colocated_mode) != 0) {
                     wifi_hal_error_print(
-                        "%s:%d Error configuring vapname for interface:%s, colocated_mode:%d",
-                        __func__, __LINE__, ifname, hal->wifi_prop.colocated_mode);
+                        "%s:%d Error configuring vapname for interface:%s, colocated_mode:%d", __func__, __LINE__, ifname, hal->wifi_prop.colocated_mode);
                     hal->wifi_prop.colocated_mode = -1;
                 }
             } else {
@@ -341,16 +336,16 @@ INT wifi_hal_getHalCapability(wifi_hal_capability_t *hal)
 
     for (i = 0; i < hal->wifi_prop.numRadios; i++) {
         radio_band = 0;
-        radio = get_radio_by_rdk_index(i);
+		  radio = get_radio_by_rdk_index(i);
+
         wifi_hal_info_print("%s:%d:Enumerating interfaces on PHY radio index: %d, RDK radio index:%d\n", __func__, __LINE__, radio->index, i);
         hal->wifi_prop.radio_presence[i] = radio->radio_presence;
-        interface = hash_map_get_first(radio->interface_map);
+    interface = hash_map_get_first(radio->interface_map);
         while (interface != NULL) {
             vap = &interface->vap_info;
             strncpy(interface->firmware_version, hal->wifi_prop.software_version, sizeof(interface->firmware_version) - 1);
             interface->firmware_version[sizeof(interface->firmware_version) - 1] = '\0';
-            wifi_hal_info_print("%s:%d:interface name: %s, interface->firmware_version: %s, vap index: %d, vap name: %s\n", __func__, __LINE__,
-                    interface->name, interface->firmware_version, vap->vap_index, vap->vap_name);
+            wifi_hal_info_print("%s:%d:interface name: %s, interface->firmware_version: %s, vap index: %d, vap name: %s\n", __func__, __LINE__,      interface->name, interface->firmware_version, vap->vap_index, vap->vap_name);
             interface = hash_map_get_next(radio->interface_map, interface);
         }
 
