@@ -31,8 +31,7 @@
 #include <uci_wrapper.h>
 #include "wifi_hal.h"
 #include "wifi_hal_priv.h"
-#include "arris_rpc.h"
-#include "platform_hal.h"
+
 
 #if HAL_IPC
 #include "hal_ipc.h"
@@ -76,7 +75,8 @@ int platform_pre_init()
 
     return 0;
 }
-
+#include "arris_rpc.h"
+#include "platform_hal.h"
 #ifdef MXL_WIFI
 /**
  * opclass_channel_to_center_freq - Compute center frequency from operating class,
@@ -106,7 +106,7 @@ static int opclass_channel_to_center_freq(UINT op_class, UINT channel, int bw)
     case 20:
         return freq;
 
-    case 40:
+                     case 40:
         /* 40 MHz: center = primary ± 10 MHz, direction determined by operating class */
         switch (op_class) {
         case 83:   /* 2.4 GHz HT40+ */
