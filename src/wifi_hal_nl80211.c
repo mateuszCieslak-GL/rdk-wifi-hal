@@ -685,9 +685,19 @@ void create_connect_steering_event(wifi_interface_info_t *interface, wifi_steeri
 
     for_each_element(elem, (unsigned char *)(l_variable), len - 4) {
         switch (elem->id) {
-        case WLAN_EID_EXT_CAPAB:
+        case WLAN_EID_EXT_CAPAB: {
+            /* XB9-1428: verify the fixed 4-byte read isn't OOB, and what bit19 SHOULD be. */
+            int btm_correct = (elem->datalen > 2) ? !!(elem->data[2] & 0x08) : 0;
+            wifi_hal_info_print("%s:%d: XB9-1428 extcap datalen=%u oob4=%d octets=%02x %02x %02x %02x btm_correct=%d\n",
+                                __func__, __LINE__, elem->datalen, (elem->datalen < 4),
+                                elem->datalen > 0 ? elem->data[0] : 0,
+                                elem->datalen > 1 ? elem->data[1] : 0,
+                                elem->datalen > 2 ? elem->data[2] : 0,
+                                elem->datalen > 3 ? elem->data[3] : 0,
+                                btm_correct);
             parse_btm_supported(steering_event, le32toh(*(uint32_t *)elem->data));
             break;
+        }
         case WLAN_EID_RRM_ENABLED_CAPABILITIES:
             parse_rrm_supported(steering_event, elem->data[0], elem->data[1], elem->data[4]);
             if (elem->data[0] || elem->data[1] ||
