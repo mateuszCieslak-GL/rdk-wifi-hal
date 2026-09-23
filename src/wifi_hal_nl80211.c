@@ -647,9 +647,20 @@ void create_connect_steering_event(wifi_interface_info_t *interface, wifi_steeri
 
     for_each_element(elem, (unsigned char *)(l_variable), len - 4) {
         switch (elem->id) {
-        case WLAN_EID_EXT_CAPAB:
-            parse_btm_supported(steering_event, le32toh(*(uint32_t *)elem->data));
-            break;
+         case WLAN_EID_EXT_CAPAB: {
+            /* XB9-1428: verify the fixed 4-byte read isn't OOB, and what bit19 SHOULD be.
+             * BSS-Transition = ext-cap bit19 = octet index 2, bit 3 (0x08); needs datalen >= 3. */
+            int btm_correct = (elem->datalen > 2) ? !!(elem->data[2] & 0x08) : 0;
+            wifi_hal_info_print("%s:%d: XB9-1428 extcap datalen=%u oob4=%d octets=%02x %02x %02x %02x btm_correct=%d\n",
+                                __func__, __LINE__, elem->datalen, (elem->datalen < 4),
+                                elem->datalen > 0 ? elem->data[0] : 0,
+                                elem->datalen > 1 ? elem->data[1] : 0,
+                                elem->datalen > 2 ? elem->data[2] : 0,
+                                elem->datalen > 3 ? elem->data[3] : 0,
+                                btm_correct);
+             parse_btm_supported(steering_event, le32toh(*(uint32_t *)elem->data));
+             break;
+        }
         case WLAN_EID_RRM_ENABLED_CAPABILITIES:
             parse_rrm_supported(steering_event, elem->data[0], elem->data[1], elem->data[4]);
             if (elem->data[0] || elem->data[1] ||
@@ -5686,6 +5697,12 @@ static int get_sta_handler(struct nl_msg *msg, void *arg)
             return NL_SKIP;
         }
 
+    /* XB9-1428 trace: what the connect-steering parse actually yielded */
+    wifi_hal_info_print("%s:%d: XB9-1428 parse stype=%d len=%u isBTM=%d isRRM=%d band5G=%d band2G=%d\n",
+                        __func__, __LINE__, stype, len,
+                        steering_event->isBTMSupported, steering_event->isRRMSupported,
+                        steering_event->bandCap5G, steering_event->bandCap2G);
+ 
         create_connect_steering_event(interface, &connect_steering_event,
             (struct ieee80211_mgmt *)station->assoc_req, station->assoc_req_len);
 
