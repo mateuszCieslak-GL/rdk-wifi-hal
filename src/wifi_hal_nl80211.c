@@ -5702,7 +5702,7 @@ static int get_sta_handler(struct nl_msg *msg, void *arg)
             return NL_SKIP;
         }
 
-        wifi_hal_info_print("%s:%d: XB9-1428 src vap=%d assoc_req=%p assoc_req_len=%u\n",
+        wifi_hal_info_print("%s:%d: XB9-1428 src vap=%d assoc_req=%p assoc_req_len=%lu\n",
                             __func__, __LINE__, vap->vap_index,
                             station->assoc_req, station->assoc_req_len);
  
