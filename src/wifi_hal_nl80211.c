@@ -684,6 +684,11 @@ void create_connect_steering_event(wifi_interface_info_t *interface, wifi_steeri
         }
     }
 
+    wifi_hal_info_print("%s:%d: XB9-1428 parse stype=%d len=%u isBTM=%d isRRM=%d band5G=%d band2G=%d\n",
+                        __func__, __LINE__, stype, len,
+                        steering_event->isBTMSupported, steering_event->isRRMSupported,
+                        steering_event->bandCap5G, steering_event->bandCap2G);
+ 
     /* HE */
     if (get_ie_ext_by_eid(WLAN_EID_EXT_HE_CAPABILITIES, (unsigned char *)(l_variable), len - 4,
         (unsigned char **)&he_cap_tlv, &he_cap_len) == true) {
@@ -5697,11 +5702,9 @@ static int get_sta_handler(struct nl_msg *msg, void *arg)
             return NL_SKIP;
         }
 
-    /* XB9-1428 trace: what the connect-steering parse actually yielded */
-    wifi_hal_info_print("%s:%d: XB9-1428 parse stype=%d len=%u isBTM=%d isRRM=%d band5G=%d band2G=%d\n",
-                        __func__, __LINE__, stype, len,
-                        steering_event->isBTMSupported, steering_event->isRRMSupported,
-                        steering_event->bandCap5G, steering_event->bandCap2G);
+        wifi_hal_info_print("%s:%d: XB9-1428 src vap=%d assoc_req=%p assoc_req_len=%u\n",
+                            __func__, __LINE__, vap->vap_index,
+                            station->assoc_req, station->assoc_req_len);
  
         create_connect_steering_event(interface, &connect_steering_event,
             (struct ieee80211_mgmt *)station->assoc_req, station->assoc_req_len);
