@@ -82,7 +82,17 @@ librdk_wifihal_la_CPPFLAGS += -I$(top_srcdir)/../platform/broadcom
 librdk_wifihal_la_SOURCES += ../platform/broadcom/platform.c
 endif
 
+if RDKB_ONE_WIFI_PROD
+librdk_wifihal_la_CPPFLAGS += -I$(top_srcdir)/../platform/broadcom
+librdk_wifihal_la_SOURCES += ../platform/broadcom/platform.c
+endif
+
 if SCXER10_PORT
+librdk_wifihal_la_CPPFLAGS += -I$(top_srcdir)/../platform/broadcom
+librdk_wifihal_la_SOURCES += ../platform/broadcom/platform.c
+endif
+
+if SCXF10_PORT
 librdk_wifihal_la_CPPFLAGS += -I$(top_srcdir)/../platform/broadcom
 librdk_wifihal_la_SOURCES += ../platform/broadcom/platform.c
 endif
@@ -123,6 +133,12 @@ if RASPBERRY_PI_PORT
 librdk_wifihal_la_CPPFLAGS += -I$(top_srcdir)/../platform/raspberry-pi
 librdk_wifihal_la_SOURCES += ../platform/raspberry-pi/platform_pi.c
 endif
+
+if BANANA_PI_PORT
+librdk_wifihal_la_CPPFLAGS += -I$(top_srcdir)/../platform/banana-pi -I${PKG_CONFIG_SYSROOT_DIR}${includedir}/rdk-wifi-libhostap/wpa_supplicant
+librdk_wifihal_la_SOURCES += ../platform/banana-pi/platform.c
+endif
+
 include_HEADERS = wifi_hal_rdk.h wifi_hal_rdk_framework.h ieee80211.h ../util_crypto/aes_siv.h
 
 if ONE_WIFIBUILD

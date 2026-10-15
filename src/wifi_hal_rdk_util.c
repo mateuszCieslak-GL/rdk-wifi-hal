@@ -56,6 +56,7 @@
 #include <cjson/cJSON.h>
 #include <sys/types.h>
 #include <ifaddrs.h>
+#include <limits.h>
 
 /* WPS_METHOD_LIMIT */
 /* WIFI_ONBOARDINGMETHODS_USBFLASHDRIVE | WIFI_ONBOARDINGMETHODS_ETHERNET | WIFI_ONBOARDINGMETHODS_LABEL | WIFI_ONBOARDINGMETHODS_DISPLAY | WIFI_ONBOARDINGMETHODS_EXTERNALNFCTOKEN | WIFI_ONBOARDINGMETHODS_INTEGRATEDNFCTOKEN | WIFI_ONBOARDINGMETHODS_NFCINTERFACE | WIFI_ONBOARDINGMETHODS_PUSHBUTTON | WIFI_ONBOARDINGMETHODS_PIN | WIFI_ONBOARDINGMETHODS_PHYSICALPUSHBUTTON | WIFI_ONBOARDINGMETHODS_PHYSICALDISPLAY | WIFI_ONBOARDINGMETHODS_VIRTUALPUSHBUTTON |WIFI_ONBOARDINGMETHODS_VIRTUALDISPLAY | WIFI_ONBOARDINGMETHODS_EASYCONNECT  = 0x7FFF */ 
@@ -156,6 +157,8 @@ static int move_radio_capability(wifi_radio_capabilities_t *tmp_cap, wifi_radio_
     tmp_cap->cipherSupported = cap->cipherSupported;
     tmp_cap->numcountrySupported = cap->numcountrySupported;
     tmp_cap->maxNumberVAPs = cap->maxNumberVAPs;
+    tmp_cap->mldOperationalCap = cap->mldOperationalCap;
+    tmp_cap->TIDLinkMapNegotiation = cap->TIDLinkMapNegotiation;
     for (j=0 ; j<tmp_cap->numcountrySupported ; j++) {
         tmp_cap->countrySupported[j] = cap->countrySupported[j];
     }
@@ -361,7 +364,12 @@ int validate_wifi_interface_vap_info_params(wifi_vap_info_t *vap_info, char *msg
         ret = RETURN_ERR;
         snprintf(msg + strlen(msg), len - strlen(msg), " showSsid: %d", bss_info->showSsid);
     }
-
+#ifndef TARGET_GEMINI7_2
+    if (strncmp(vap_info->bridge_name, "", strlen(vap_info->bridge_name)) == 0) {
+        ret = RETURN_ERR;
+        snprintf(msg + strlen(msg), len - strlen(msg), " Bridge name is null for vap index %u", vap_info->vap_index);
+    }
+#endif
     // security parameter values
     if (bss_info->security.mode <= 0 || bss_info->security.mode >  wifi_security_mode_wpa3_compatibility ||
             (bss_info->security.mode &(bss_info->security.mode - 1)) != 0) {
@@ -382,6 +390,9 @@ int validate_wifi_interface_vap_info_params(wifi_vap_info_t *vap_info, char *msg
     case wifi_encryption_tkip:
     case wifi_encryption_aes:
     case wifi_encryption_aes_tkip:
+#ifdef CONFIG_IEEE80211BE
+    case wifi_encryption_aes_gcmp256:
+#endif /* CONFIG_IEEE80211BE */
         break;
     default:
         ret = RETURN_ERR;
@@ -460,12 +471,17 @@ cJSON *json_open_file(const char *file_name)
     }
     fseek(fp, 0, SEEK_END);
     len = ftell(fp);
+    if (len == UINT_MAX) {
+        fclose(fp);
+        return json;
+    }
     fseek(fp, 0, SEEK_SET);
 
     buff = malloc(len);
     if (buff == NULL) {
         wifi_hal_error_print("%s:%d: Failed to allocate %zu bytes for json file\n", __func__,
             __LINE__, len);
+        fclose(fp);
         return NULL;
     }
     len = fread(buff, 1, len, fp);
@@ -583,3 +599,49 @@ bool get_ifname_from_mac(const mac_address_t *mac, char *ifname)
     freeifaddrs(ifaddr);
     return found;
 }
+
+int wifi_convert_freq_band_to_radio_index(int band, int *radio_index)
+{
+    int status = RETURN_OK;
+
+    switch (band) {
+    case WIFI_FREQUENCY_2_4_BAND:
+        *radio_index = 0;
+        break;
+
+    case WIFI_FREQUENCY_5_BAND:
+    case WIFI_FREQUENCY_5L_BAND:
+        *radio_index = 1;
+        break;
+
+    case WIFI_FREQUENCY_5H_BAND:
+    case WIFI_FREQUENCY_6_BAND:
+        *radio_index = 2;
+        break;
+
+    default:
+        status = RETURN_ERR;
+        break;
+    }
+    return status;
+}
+
+#if defined(CONFIG_IEEE80211BE) && (HOSTAPD_VERSION >= 211)
+void wifi_get_mld_eml_cap(const u16 mld_cap, const u16 eml_cap, wifi_multi_link_modes_t *mode_val, BOOL *tid_neg)
+{
+    if (mode_val)
+        *mode_val = 0;
+
+    if (tid_neg)
+        *tid_neg = !!(mld_cap & EHT_ML_MLD_CAPA_TID_TO_LINK_MAP_NEG_SUPP_MSK);
+    if (mode_val && ((mld_cap & EHT_ML_MLD_CAPA_MAX_NUM_SIM_LINKS_MASK) > 0))
+        *mode_val |= STR;
+    if (mode_val && (eml_cap & EHT_ML_EML_CAPA_EMLMR_SUPP))
+        *mode_val |= eMLMR;
+    if (mode_val && (eml_cap & EHT_ML_EML_CAPA_EMLSR_SUPP))
+        *mode_val |= eMLSR;
+
+    /* FIXME the NSTR is basic MLO mode, with enhanced EMLSR if supported assume supported always */
+    // *mode_val |= NSTR;
+}
+#endif //(CONFIG_IEEE80211BE) && (HOSTAPD_VERSION >= 211)

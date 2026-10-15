@@ -427,7 +427,7 @@ int check_radio_index(uint8_t radio_index)
     return -1;
 }
 
-int platform_get_chanspec_list(unsigned int radioIndex, wifi_channelBandwidth_t bandwidth, wifi_channels_list_t channels, char *buff)
+int platform_get_chanspec_list(unsigned int radioIndex, wifi_channelBandwidth_t bandwidth, const wifi_channels_list_t *channels, char *buff)
 {
     wifi_hal_dbg_print("%s:%d \n",__func__,__LINE__);    
     return 0;
@@ -1450,6 +1450,16 @@ int platform_get_radio_caps(wifi_radio_index_t index)
     return RETURN_OK;
 }
 
+int platform_get_reg_domain(wifi_radio_index_t radioIndex, UINT *reg_domain)
+{
+    return RETURN_OK;
+}
+
+int platform_set_beacon_prot(uint apIndex, bool isEnabled)
+{
+    return RETURN_OK;
+}
+
 static int qca_add_intf_to_bridge(wifi_interface_info_t *interface, bool is_mld)
 {
     char mld_ifname[32];
@@ -1730,4 +1740,15 @@ INT platform_create_interface_attributes(struct nl_msg **msg_ptr, wifi_radio_inf
         return RETURN_ERR;
     }
     return RETURN_OK;
+}
+
+INT wifi_sendActionFrameExt(INT apIndex, mac_address_t MacAddr, UINT frequency, UINT wait, UCHAR *frame, UINT len)
+{
+    int res = wifi_hal_send_mgmt_frame(apIndex, MacAddr, frame, len, frequency, wait);
+    return (res == 0) ? WIFI_HAL_SUCCESS : WIFI_HAL_ERROR;
+}
+
+INT wifi_sendActionFrame(INT apIndex, mac_address_t MacAddr, UINT frequency, UCHAR *frame, UINT len)
+{
+    return wifi_sendActionFrameExt(apIndex, MacAddr, frequency, 0, frame, len);
 }

@@ -21,19 +21,18 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <errno.h>
 #include <unistd.h>
 #include <net/if_arp.h>
 #include <arpa/inet.h>
 #include <net/if.h>
-#include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/uio.h>
 #include <unistd.h>
 #include "wifi_hal.h"
 #include "wifi_hal_rdk.h"
+#include "wifi_hal_priv.h"
 #include "pcap.h"
 #include "ieee80211.h"
 
@@ -201,32 +200,6 @@ int parse_ctl_frame(struct ieee80211_frame *frame, size_t len, frame_test_arg_t 
     return RETURN_ERR;
 }
 
-int get_mac_address (char *intf_name,  mac_address_t mac)
-{
-#ifdef LINUX_PORT
-    int sock;
-    struct ifreq ifr;
-
-    if ((sock = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
-        printf("Failed to create socket\n");
-        return -1;
-    }
-
-    ifr.ifr_addr.sa_family = AF_INET;
-       strcpy(ifr.ifr_name, intf_name);
-    if (ioctl(sock, SIOCGIFHWADDR, &ifr) != 0) {
-        close(sock);
-        printf("ioctl failed to get hardware address\n");
-        return -1;
-    }
-
-    memcpy(mac, (unsigned char *)ifr.ifr_hwaddr.sa_data, sizeof(mac_address_t));
-    close(sock);
-#endif
-
-    return 0;
-}
-
 int parse_frame(unsigned char *data, size_t len, frame_test_arg_t *arg, wifi_direction_t *frame_dir)
 {
     struct ieee80211_frame *frame;
@@ -314,7 +287,11 @@ int test_data_from_pcap(frame_test_arg_t *arg)
 
 
     while ((sz = fread(&pkt_hdr, 1, sizeof(wireshark_pkthdr_t), fp)) == sizeof(wireshark_pkthdr_t)) {
-     memset(tmp, 0, 4096);
+     if (pkt_hdr.caplen == 0 || pkt_hdr.caplen > sizeof(tmp)) {
+        fclose(fp);
+        return RETURN_ERR;
+     }
+     memset(tmp, 0, sizeof(tmp));
      sz = fread(tmp, 1, pkt_hdr.caplen, fp);
      
      if (sz == pkt_hdr.caplen) {
@@ -347,7 +324,7 @@ int test_data_from_pcapng(frame_test_arg_t *arg)
     section_header_block_t sblock;
     interface_description_block_t   iblock;
     enhanced_packet_block_t eblock;
-    size_t sz;
+    size_t sz, payload_len;
     unsigned char tmp[4096];
     unsigned int frames_parsed = 0, valid_frames_parsed = 0;
        wifi_direction_t        dir;
@@ -369,9 +346,16 @@ int test_data_from_pcapng(frame_test_arg_t *arg)
       return RETURN_ERR;
     }
 
-    memset(tmp, 0, 4096);
-    sz = fread(tmp, 1, sblock.block_len - sizeof(section_header_block_t), fp);
-    if (sz != sblock.block_len - sizeof(section_header_block_t)) {
+    payload_len = sblock.block_len - sizeof(section_header_block_t);
+
+    if (sblock.block_len < sizeof(section_header_block_t) || payload_len > sizeof(tmp)) {
+      fclose(fp);
+      return RETURN_ERR;
+    }
+
+    memset(tmp, 0, sizeof(tmp));
+    sz = fread(tmp, 1, payload_len, fp);
+    if (sz != payload_len) {
       fclose(fp);
       return RETURN_ERR;
     }
@@ -382,20 +366,36 @@ int test_data_from_pcapng(frame_test_arg_t *arg)
       return RETURN_ERR;
     }
 
-    memset(tmp, 0, 4096);
-    sz = fread(tmp, 1, iblock.block_len - sizeof(interface_description_block_t), fp);
-    if (sz != iblock.block_len - sizeof(interface_description_block_t)) {
+    payload_len = iblock.block_len - sizeof(interface_description_block_t);
+
+    if (iblock.block_len < sizeof(interface_description_block_t) || payload_len > sizeof(tmp)) {
+      fclose(fp);
+      return RETURN_ERR;
+    }
+
+    memset(tmp, 0, sizeof(tmp));
+    sz = fread(tmp, 1, payload_len, fp);
+    if (sz != payload_len) {
       fclose(fp);
       return RETURN_ERR;
     }
 
 
     while ((sz = fread(&eblock, 1, sizeof(enhanced_packet_block_t), fp)) == sizeof(enhanced_packet_block_t)) {
-        memset(tmp, 0, 4096);
-        sz = fread(tmp, 1, eblock.block_len - sizeof(enhanced_packet_block_t), fp);
+        payload_len = eblock.block_len - sizeof(enhanced_packet_block_t);
+        if (eblock.block_len < sizeof(enhanced_packet_block_t) || payload_len > sizeof(tmp)) {
+            fclose(fp);
+            return RETURN_ERR;
+        }
+        memset(tmp, 0, sizeof(tmp));
+        sz = fread(tmp, 1, payload_len, fp);
       
-        if (sz == (eblock.block_len - sizeof(enhanced_packet_block_t))) {
+        if (sz == payload_len) {
             if ((frames_parsed >= (arg->first_frame_num - 1)) && (frames_parsed <= (arg->last_frame_num - 1))) {
+                if (eblock.caplen == 0 || eblock.caplen > sizeof(tmp)) {
+                       fclose(fp);
+                       return RETURN_ERR;
+                }
                 if (parse_frame(tmp, eblock.caplen, arg, &dir) == RETURN_OK) {
                        valid_frames_parsed++;
                        printf("%s:%d: Accepted frame number:%d Direction:%s\n", __func__, __LINE__, frames_parsed + 1, (dir == wifi_direction_uplink) ? "Uplink":"Downlink");

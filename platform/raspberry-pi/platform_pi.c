@@ -174,7 +174,7 @@ int platform_get_keypassphrase_default(char *password, int vap_index)
     wifi_hal_dbg_print("%s:%d \n", __func__, __LINE__);
     /* if the vap_index is that of mesh STA then try to obtain the ssid from
        /nvram/EasymeshCfg.json file */
-    if (is_wifi_hal_vap_mesh_sta(vap_index)) {
+    if (is_wifi_hal_vap_mesh_sta(vap_index) || is_wifi_hal_vap_mesh_backhaul(vap_index)) {
         if (!json_parse_backhaul_keypassphrase(password)) {
             wifi_hal_dbg_print("%s:%d, read password from jSON file\n", __func__, __LINE__);
             return 0;
@@ -198,7 +198,7 @@ int platform_get_ssid_default(char *ssid, int vap_index)
     wifi_hal_dbg_print("%s:%d \n", __func__, __LINE__);
     /* if the vap_index is that of mesh STA or mesh backhaul then try to obtain the ssid from
        /nvram/EasymeshCfg.json file */
-    if (is_wifi_hal_vap_mesh_sta(vap_index)) {
+    if (is_wifi_hal_vap_mesh_sta(vap_index) || is_wifi_hal_vap_mesh_backhaul(vap_index)) {
         if (!json_parse_backhaul_ssid(ssid)) {
             wifi_hal_dbg_print("%s:%d, read SSID:%s from jSON file\n", __func__, __LINE__, ssid);
             return 0;
@@ -316,7 +316,7 @@ int platform_get_acl_num(int vap_index, uint *acl_count)
     return 0;
 }
 
-int platform_get_chanspec_list(unsigned int radioIndex, wifi_channelBandwidth_t bandwidth, wifi_channels_list_t channels, char *buff)
+int platform_get_chanspec_list(unsigned int radioIndex, wifi_channelBandwidth_t bandwidth, const wifi_channels_list_t *channels, char *buff)
 {
     wifi_hal_dbg_print("%s:%d \n",__func__,__LINE__);    
     return 0;
@@ -384,9 +384,32 @@ INT wifi_getApEnable(INT apIndex, BOOL *output_bool)
 //--------------------------------------------------------------------------------------------------
 INT wifi_setApMacAddressControlMode(INT apIndex, INT filterMode)
 {
+    wifi_vap_info_t *vap_info = NULL;
+    wifi_interface_info_t *interface = NULL;
+
+    interface = get_interface_by_vap_index(apIndex);
+    if (interface == NULL) {
+        wifi_hal_error_print("%s:%d: interface for ap index:%d not found\n", __func__, __LINE__, apIndex);
+        return RETURN_ERR;
+    }
+
+    vap_info = &interface->vap_info;
+
+    if (vap_info->vap_mode == wifi_vap_mode_ap) {
+        if (filterMode == 0) {
+               vap_info->u.bss_info.mac_filter_enable = FALSE;
+               vap_info->u.bss_info.mac_filter_mode  = wifi_mac_filter_mode_black_list;
+        } else if(filterMode == 1) {
+               vap_info->u.bss_info.mac_filter_enable = TRUE;
+               vap_info->u.bss_info.mac_filter_mode  = wifi_mac_filter_mode_white_list;
+        } else if(filterMode == 2) {
+               vap_info->u.bss_info.mac_filter_enable = TRUE;
+               vap_info->u.bss_info.mac_filter_mode  = wifi_mac_filter_mode_black_list;
+        }
+    }
+
     return RETURN_OK;
 }
-
 
 //--------------------------------------------------------------------------------------------------
 INT wifi_getBssLoad(INT apIndex, BOOL *enabled)
@@ -408,6 +431,16 @@ INT wifi_setApIsolationEnable(INT apIndex, BOOL enable)
 int platform_get_radio_caps(wifi_radio_index_t index)
 { 
     return 0;
+}
+
+int platform_get_reg_domain(wifi_radio_index_t radioIndex, UINT *reg_domain)
+{
+    return RETURN_OK;
+}
+
+int platform_set_beacon_prot(uint apIndex, bool isEnabled)
+{
+    return RETURN_OK;
 }
 
 INT wifi_getApDeviceRSSI(INT ap_index, CHAR *MAC, INT *output_RSSI)
@@ -713,9 +746,15 @@ INT wifi_getApInterworkingServiceEnable(INT apIndex, BOOL *output_bool)
     return 0;
 }
 
+INT wifi_sendActionFrameExt(INT apIndex, mac_address_t MacAddr, UINT frequency, UINT wait, UCHAR *frame, UINT len)
+{
+    int res = wifi_hal_send_mgmt_frame(apIndex, MacAddr, frame, len, frequency, wait);
+    return (res == 0) ? WIFI_HAL_SUCCESS : WIFI_HAL_ERROR;
+}
+
 INT wifi_sendActionFrame(INT apIndex, mac_address_t MacAddr, UINT frequency, UCHAR *frame, UINT len)
 {
-    return 0;
+    return wifi_sendActionFrameExt(apIndex, MacAddr, frequency, 0, frame, len);
 }
 
 INT wifi_setDownStreamGroupAddress(INT apIndex, BOOL disabled)
@@ -725,4 +764,20 @@ INT wifi_setDownStreamGroupAddress(INT apIndex, BOOL disabled)
 INT wifi_getApAssociatedClientDiagnosticResult(INT ap_index, char *key,wifi_associated_dev3_t *assoc)
 {
     return RETURN_ERR;
+}
+INT wifi_getApManagementFramePowerControl(INT apIndex, INT *output_dBm)
+{
+    return 0;
+}
+
+UINT wifi_freq_to_op_class(UINT freq)
+{
+    u8 op_class, channel;
+
+    if (ieee80211_freq_to_channel_ext(freq, 0, 0, &op_class, &channel) == NUM_HOSTAPD_MODES){
+        wifi_hal_error_print("%s:%d Failed to get op class for freq : %d\n", __func__, __LINE__, freq);
+        return RETURN_ERR;
+    }
+
+    return op_class;
 }
